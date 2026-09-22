@@ -1,0 +1,31 @@
+site,texture,t_min,I_cm
+A,loam,1,0.25
+A,loam,2,0.35
+A,loam,3,0.48
+A,loam,5,0.61
+A,loam,7,0.74
+A,loam,10,0.94
+A,loam,15,1.2
+A,loam,20,1.44
+A,loam,30,1.83
+A,loam,45,2.49
+A,loam,60,3.0
+A,loam,90,3.95
+A,loam,120,5.12
+A,loam,150,5.89
+A,loam,180,6.78
+B,loam sableux,1,0.65
+B,loam sableux,2,0.97
+B,loam sableux,3,1.24
+B,loam sableux,5,1.65
+B,loam sableux,7,2.08
+B,loam sableux,10,2.39
+B,loam sableux,15,3.35
+B,loam sableux,20,3.91
+B,loam sableux,30,5.02
+B,loam sableux,45,6.87
+B,loam sableux,60,8.7
+B,loam sableux,90,11.17
+B,loam sableux,120,14.62
+B,loam sableux,150,17.14
+B,loam sableux,180,20.2

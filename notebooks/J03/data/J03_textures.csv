@@ -1,0 +1,7 @@
+sol,classe_USDA,sable_pct,limon_pct,argile_pct,MO_pct,rho_b_gcm3
+A,sable,92,5,3,0.5,1.6
+B,loam sableux,65,25,10,1.5,1.5
+C,loam,40,40,20,2.5,1.4
+D,loam limoneux,20,65,15,3.0,1.35
+E,loam argileux,30,36,34,2.5,1.35
+F,argile,20,25,55,2.0,1.25
