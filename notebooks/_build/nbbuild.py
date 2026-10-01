@@ -54,15 +54,29 @@ class Notebook:
             self.cells_i.append(nbf.new_code_cell(src))
 
     # -- exercice ---------------------------------------------------------
-    def exercice(self, titre: str, enonce: str, solution: str, squelette: str | None = None,
-                 commentaire: str = "", duree: str = ""):
+    def exercice(self, titre: str, enonce: str, solution: str | None = None, squelette: str | None = None,
+                 commentaire: str = "", duree: str = "", etapes: list | None = None):
+        """Un exercice = un énoncé (markdown) puis une ou plusieurs étapes.
+
+        Forme simple : `solution` (une cellule de code complète) et `squelette` (la même cellule à compléter).
+        Forme linéaire (recommandée) : `etapes` = liste de dict(titre=..., solution=..., squelette=...) ;
+        chaque étape devient une petite cellule markdown (**titre**) suivie d'une cellule de code, ce qui permet
+        d'exécuter et d'expliquer le calcul pas à pas. Si `squelette` manque dans une étape, la cellule étudiant
+        reprend la solution (étape « donnée », par exemple la lecture des données).
+        """
         self._n_ex += 1
         head = f"## Exercice {self._n_ex} — {titre}" + (f"  *(≈ {duree})*" if duree else "")
         self.md(head + "\n\n" + enonce.strip("\n"))
-        if squelette is None:
-            squelette = "# À COMPLÉTER\n"
-        self.cells_e.append(nbf.new_code_cell(squelette.strip("\n")))
-        self.cells_i.append(nbf.new_code_cell(solution.strip("\n")))
+        if etapes is None:
+            etapes = [dict(solution=solution, squelette=squelette if squelette is not None else "# À COMPLÉTER\n")]
+        for et in etapes:
+            if et.get("titre"):
+                self.md(f"**{et['titre']}**")
+            sol = et["solution"].strip("\n")
+            sq = et.get("squelette")
+            sq = sol if sq is None else sq.strip("\n")
+            self.cells_e.append(nbf.new_code_cell(sq))
+            self.cells_i.append(nbf.new_code_cell(sol))
         if commentaire:
             self.cells_i.append(nbf.new_markdown_cell("**Commentaire (instructeur).** " + commentaire.strip("\n")))
 

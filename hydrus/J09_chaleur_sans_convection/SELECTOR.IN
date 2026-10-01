@@ -1,0 +1,52 @@
+Pcp_File_Version=4
+*** BLOCK A: BASIC INFORMATION ***************************************************
+Created with Pydrus version 0.2.0
+Onde thermique journaliere sans convection, loam h=-100 cm
+LUnit TUnit MUnit
+cm
+days
+g
+lWat  lChem  lTemp  lSink  lRoot  lShort  lWDep  lScreen  AtmInf  lEquil  lInverse  
+t  f  t  f  f  f  f  f  f  t  f
+lSnow  lHP1  lMeteo  lVapor  lActRSU  lFlux  lIrrig  
+f  f  f  f  f  f  f
+NMat NLay CosAlfa 
+1 1 1
+*** BLOCK B: WATER FLOW INFORMATION **********************************************
+MaxIt  TolTh  TolH   (maximum number of iterations and tolerances)
+20   0.001   1
+TopInf  WLayer  KodTop  lInitW  
+f f -1 f 
+BotInf  qGWLF  FreeD  SeepF  KodBot  qDrain  hSeep  
+f f f f -1 f 0 
+rTop  rBot  rRoot  
+0.0 0.0 0 
+ha  hb  
+1e-06 10000.0 
+iModel  iHyst  
+0 0 
+  thr  ths  Alfa    n    Ks   l
+0.078 0.43 0.036 1.56 24.96 0.5
+*** BLOCK C: TIME INFORMATION ****************************************************
+dt dtMin dtMax dMul dMul2 ItMin ItMax MPL 
+0.001 1e-07 0.01 1.3 0.7 3 7 40 
+tInit tMax 
+0 5.0 
+lPrint nPrintSteps tPrintInterval lEnter 
+t 1 1 f 
+TPrint(1),TPrint(2),...,TPrint(MPL)
+0.125 0.25 0.375 0.5 0.625 0.75
+0.875 1.0 1.125 1.25 1.375 1.5
+1.625 1.75 1.875 2.0 2.125 2.25
+2.375 2.5 2.625 2.75 2.875 3.0
+3.125 3.25 3.375 3.5 3.625 3.75
+3.875 4.0 4.125 4.25 4.375 4.5
+4.625 4.75 4.875 5.0
+*** BLOCK E: HEAT TRANSPORT INFORMATION ******************************************
+ thn  tho  lambda           b1           b2           b3           Cn           C0           Cw
+0.57  0.0     5.0 1.567280e+19 2.534740e+19 9.893880e+19 1.433270e+17 1.873700e+17 3.120350e+17
+ tAmpl tPeriod Campbell SnowMF lDummy lDummy lDummy lDummy lDummy
+10.0 1.0 0 0.43 f f f f f
+kTopT TTop kBotT TBot
+1 20.0 0 20.0
+*** BLOCK END OF INPUT FILE SELECTOR.IN ******************************************

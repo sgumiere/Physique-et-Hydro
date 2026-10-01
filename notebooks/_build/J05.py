@@ -54,130 +54,213 @@ def build():
 
 Les projets HYDRUS-1D de référence sont dans `../../hydrus/` et se lisent avec le module `hydrus_io.py` (dossier `notebooks/`).
 Unités du cours : **cm** et **jours** ; flux **positifs vers le haut** (convention HYDRUS-1D) ; profondeurs négatives.
+Exécutez la cellule suivante pour importer les bibliothèques et définir la table des sols de Carsel & Parrish (1988).
 """)
     nb.code("""
-import sys; sys.path.insert(0, "..")
+import sys
+sys.path.insert(0, "..")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy import optimize, integrate
+from scipy.optimize import brentq
 from hydrus_io import read_tlevel, read_nod_inf, read_obs_node, read_balance, read_run_inf
 
-plt.rcParams.update({"figure.figsize": (7, 4), "axes.grid": True, "grid.alpha": 0.3})
-HYD = "../../hydrus"
+HYD = "../../hydrus"     # dossier des projets HYDRUS-1D
 
-# Sols de Carsel & Parrish (1988) : thr, ths, alpha (1/cm), n, Ks (cm/j), l
-SOLS = {
-    "sable":         [0.045, 0.430, 0.145, 2.68, 712.8, 0.5],
-    "loam sableux":  [0.065, 0.410, 0.075, 1.89, 106.1, 0.5],
-    "loam":          [0.078, 0.430, 0.036, 1.56, 24.96, 0.5],
-    "loam limoneux": [0.067, 0.450, 0.020, 1.41, 10.80, 0.5],
-    "argile":        [0.068, 0.380, 0.008, 1.09, 4.80, 0.5],
-}
+# sols de Carsel & Parrish (1988) : thr, ths (-), alpha (1/cm), n (-), Ks (cm/j) ; l = 0,5 pour tous
+sols = pd.DataFrame(index=["sable", "loam sableux", "loam", "loam limoneux", "argile"])
+sols["thr"] = [0.045, 0.065, 0.078, 0.067, 0.068]
+sols["ths"] = [0.430, 0.410, 0.430, 0.450, 0.380]
+sols["alpha"] = [0.145, 0.075, 0.036, 0.020, 0.008]
+sols["n"] = [2.68, 1.89, 1.56, 1.41, 1.09]
+sols["Ks"] = [712.8, 106.1, 24.96, 10.80, 4.80]
+print(sols)
 """)
 
-    # ------------------------------------------------------------------ Ex 1
+    # ================================================================== Exercice 1
     nb.exercice(
         "Fonctions hydrauliques de Mualem–van Genuchten", duree="15 min",
         enonce="""
-1. Écrire `vg_theta(h, p)`, `vg_K(h, p)` et `vg_C(h, p)` (vectorisées, `p = [thr, ths, alpha, n, Ks, l]`) :
+1. Écrire les fonctions `vg_theta(h, thr, ths, alpha, n)`, `vg_K(h, thr, ths, alpha, n, Ks)` et `vg_C(h, thr, ths, alpha, n)`
+   (valables pour $h \\le 0$, avec $l = 0{,}5$) :
    $S_e = [1+(\\alpha|h|)^n]^{-m}$, $m = 1-1/n$ ; $\\theta = \\theta_r + (\\theta_s-\\theta_r)S_e$ ;
-   $K = K_s S_e^{l}[1-(1-S_e^{1/m})^m]^2$ ; $C = (\\theta_s-\\theta_r)\\,\\alpha n m (\\alpha|h|)^{n-1}[1+(\\alpha|h|)^n]^{-m-1}$ (et 0 pour $h \\ge 0$).
+   $K = K_s S_e^{l}[1-(1-S_e^{1/m})^m]^2$ ; $C = (\\theta_s-\\theta_r)\\,\\alpha n m (\\alpha|h|)^{n-1}[1+(\\alpha|h|)^n]^{-m-1}$.
+   Vérifier le loam : $K(-50) \\approx 0{,}258$ cm/j, $K(-500) \\approx 1{,}7\\times10^{-4}$ cm/j.
 2. Tracer $K(h)$ et $C(h)$ en fonction de $|h|$ (échelles log-log) pour le sable, le loam et l'argile, puis $D(\\theta) = K/C$ (échelle log en $y$).
 3. Calculer la longueur capillaire macroscopique $\\lambda_c = K_s^{-1}\\int_{-\\infty}^{0} K(h)\\,dh$ pour les cinq sols
-   (`integrate.quad` avec des points de rupture, ou trapèzes sur une grille logarithmique) et $\\alpha_G = 1/\\lambda_c$.
-   Vérifier le loam : $K(-50) \\approx 0{,}258$ cm/j, $K(-500) \\approx 1{,}7\\times10^{-4}$ cm/j, $\\lambda_c \\approx 6{,}9$ cm.
+   (trapèzes sur une grille logarithmique de $|h|$, `np.trapezoid`) et $\\alpha_G = 1/\\lambda_c$. Vérifier le loam : $\\lambda_c \\approx 6{,}9$ cm.
 """,
-        squelette="""
-def vg_theta(h, p):
-    thr, ths, a, n, Ks, l = p
+        etapes=[
+            dict(titre="1. Fonctions de van Genuchten et Mualem", solution="""
+# teneur en eau de van Genuchten (1980), h <= 0 : Se = [1 + (alpha |h|)^n]^(-m), m = 1 - 1/n
+def vg_theta(h, thr, ths, alpha, n):
     m = 1 - 1 / n
-    h = np.asarray(h, float)
-    Se = np.where(h < 0, (1 + (a * np.abs(h))**n)**(-m), 1.0)
-    return thr + (ths - thr) * Se
+    Se = (1 + (alpha * np.abs(h)) ** n) ** (-m)
+    theta = thr + (ths - thr) * Se
+    return theta
 
-def vg_K(h, p):
-    thr, ths, a, n, Ks, l = p
+# conductivité hydraulique de Mualem–van Genuchten (cm/j), l = 0,5
+def vg_K(h, thr, ths, alpha, n, Ks):
     m = 1 - 1 / n
-    h = np.asarray(h, float)
-    Se = np.where(h < 0, (1 + (a * np.abs(h))**n)**(-m), 1.0)
-    return # À COMPLÉTER
+    Se = (1 + (alpha * np.abs(h)) ** n) ** (-m)
+    K = Ks * Se ** 0.5 * (1 - (1 - Se ** (1 / m)) ** m) ** 2
+    return K
 
-def vg_C(h, p):
-    thr, ths, a, n, Ks, l = p
+# capacité capillaire C = d theta / dh (1/cm)
+def vg_C(h, thr, ths, alpha, n):
     m = 1 - 1 / n
-    h = np.asarray(h, float)
-    return # À COMPLÉTER (0 pour h >= 0)
+    ah = alpha * np.abs(h)
+    C = (ths - thr) * alpha * n * m * ah ** (n - 1) * (1 + ah ** n) ** (-m - 1)
+    return C
 
-print("K(-50) =", vg_K(-50, SOLS["loam"]), " K(-500) =", vg_K(-500, SOLS["loam"]))
-
-# 2. tracés log-log de K(h), C(h) et D(theta)
-hh = -np.logspace(-1, 4, 300)
-# À COMPLÉTER
-
-# 3. longueur capillaire
-def lambda_c(p):
-    # À COMPLÉTER : quad(lambda h: vg_K(h, p) / p[4], -1e4, 0, limit=400, points=[-1000, -100, -10, -1])
-    pass
-""",
-        solution="""
-def vg_theta(h, p):
-    \"\"\"Teneur en eau (van Genuchten 1980).\"\"\"
-    thr, ths, a, n, Ks, l = p
+# vérification sur le loam
+thr = sols.loc["loam", "thr"]
+ths = sols.loc["loam", "ths"]
+alpha = sols.loc["loam", "alpha"]
+n = sols.loc["loam", "n"]
+Ks = sols.loc["loam", "Ks"]
+print(f"loam : K(-50) = {vg_K(-50, thr, ths, alpha, n, Ks):.4f} cm/j")
+print(f"loam : K(-500) = {vg_K(-500, thr, ths, alpha, n, Ks):.3e} cm/j")
+print(f"loam : theta(-50) = {vg_theta(-50, thr, ths, alpha, n):.3f}")
+""", squelette="""
+# teneur en eau de van Genuchten (1980), h <= 0 : Se = [1 + (alpha |h|)^n]^(-m), m = 1 - 1/n
+def vg_theta(h, thr, ths, alpha, n):
     m = 1 - 1 / n
-    h = np.asarray(h, float)
-    Se = np.where(h < 0, (1 + (a * np.abs(h))**n)**(-m), 1.0)
-    return thr + (ths - thr) * Se
+    Se = (1 + (alpha * np.abs(h)) ** n) ** (-m)
+    theta = # À COMPLÉTER
+    return theta
 
-def vg_K(h, p):
-    \"\"\"Conductivité hydraulique (Mualem–van Genuchten).\"\"\"
-    thr, ths, a, n, Ks, l = p
+# conductivité hydraulique de Mualem–van Genuchten (cm/j), l = 0,5
+def vg_K(h, thr, ths, alpha, n, Ks):
     m = 1 - 1 / n
-    h = np.asarray(h, float)
-    Se = np.where(h < 0, (1 + (a * np.abs(h))**n)**(-m), 1.0)
-    return Ks * Se**l * (1 - (1 - Se**(1 / m))**m)**2
+    Se = (1 + (alpha * np.abs(h)) ** n) ** (-m)
+    K = # À COMPLÉTER
+    return K
 
-def vg_C(h, p):
-    \"\"\"Capacité capillaire C = dtheta/dh (1/cm).\"\"\"
-    thr, ths, a, n, Ks, l = p
+# capacité capillaire C = d theta / dh (1/cm)
+def vg_C(h, thr, ths, alpha, n):
     m = 1 - 1 / n
-    h = np.asarray(h, float)
-    ah = a * np.abs(h)
-    return np.where(h < 0, (ths - thr) * a * n * m * ah**(n - 1) * (1 + ah**n)**(-m - 1), 0.0)
+    ah = alpha * np.abs(h)
+    C = # À COMPLÉTER
+    return C
 
-p = SOLS["loam"]
-print(f"loam : K(-50) = {vg_K(-50, p):.4f} cm/j ; K(-500) = {vg_K(-500, p):.3e} cm/j ; theta(-50) = {vg_theta(-50, p):.3f}")
+# vérification sur le loam
+thr = sols.loc["loam", "thr"]
+ths = sols.loc["loam", "ths"]
+alpha = sols.loc["loam", "alpha"]
+n = sols.loc["loam", "n"]
+Ks = sols.loc["loam", "Ks"]
+print(f"loam : K(-50) = {vg_K(-50, thr, ths, alpha, n, Ks):.4f} cm/j")
+print(f"loam : K(-500) = {vg_K(-500, thr, ths, alpha, n, Ks):.3e} cm/j")
+print(f"loam : theta(-50) = {vg_theta(-50, thr, ths, alpha, n):.3f}")
+"""),
+            dict(titre="2. Courbes K(h), C(h) et D(θ)", solution="""
+h_abs = np.logspace(-1, 4, 300)     # |h| de 0,1 à 10 000 cm, grille logarithmique
+h_grille = -h_abs
 
-# 2. tracés
-hh = -np.logspace(-1, 4, 300)
-fig, ax = plt.subplots(1, 3, figsize=(13, 3.8))
-for nm in ["sable", "loam", "argile"]:
-    p = SOLS[nm]
-    ax[0].loglog(-hh, vg_K(hh, p), label=nm)
-    ax[1].loglog(-hh, vg_C(hh, p), label=nm)
-    ax[2].semilogy(vg_theta(hh, p), vg_K(hh, p) / vg_C(hh, p), label=nm)
-ax[0].set(xlabel="|h| (cm)", ylabel="K (cm/j)", ylim=(1e-8, 1e3), title="conductivité K(h)")
-ax[1].set(xlabel="|h| (cm)", ylabel="C (1/cm)", title="capacité capillaire C(h)")
-ax[2].set(xlabel="theta (-)", ylabel="D = K/C (cm²/j)", ylim=(1e-1, 1e6), title="diffusivité D(theta)")
-for a in ax: a.legend()
-plt.tight_layout(); plt.show()
+plt.figure()
+for nom in ["sable", "loam", "argile"]:
+    s = sols.loc[nom]
+    K = vg_K(h_grille, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"])
+    plt.loglog(h_abs, K, label=nom)
+plt.ylim(1e-8, 1e3)
+plt.xlabel("|h| (cm)")
+plt.ylabel("K (cm/j)")
+plt.title("conductivité hydraulique K(h)")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# 3. longueur capillaire macroscopique
-def lambda_c(p):
-    \"\"\"lambda_c = int_{-inf}^0 K(h) dh / Ks (cm) — quadrature avec points de rupture (K varie sur 10 ordres).\"\"\"
-    val, err = integrate.quad(lambda h: vg_K(h, p) / p[4], -1e4, 0, limit=400, points=[-1000, -100, -10, -1])
-    return val
+plt.figure()
+for nom in ["sable", "loam", "argile"]:
+    s = sols.loc[nom]
+    C = vg_C(h_grille, s["thr"], s["ths"], s["alpha"], s["n"])
+    plt.loglog(h_abs, C, label=nom)
+plt.xlabel("|h| (cm)")
+plt.ylabel("C (1/cm)")
+plt.title("capacité capillaire C(h)")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# vérification par trapèzes sur une grille logarithmique de |h| (la contribution de |h| > 1e4 est négligeable)
-def lambda_c_trapz(p, hmin=1e-2, hmax=1e4, n=2000):
-    habs = np.logspace(np.log10(hmin), np.log10(hmax), n)
-    return np.trapezoid(vg_K(-habs, p) / p[4], habs) + hmin   # + segment [0, hmin] où K ≈ Ks
+plt.figure()
+for nom in ["sable", "loam", "argile"]:
+    s = sols.loc[nom]
+    theta = vg_theta(h_grille, s["thr"], s["ths"], s["alpha"], s["n"])
+    K = vg_K(h_grille, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"])
+    C = vg_C(h_grille, s["thr"], s["ths"], s["alpha"], s["n"])
+    D = K / C
+    plt.semilogy(theta, D, label=nom)
+plt.ylim(1e-1, 1e6)
+plt.xlabel("theta (-)")
+plt.ylabel("D = K/C (cm²/j)")
+plt.title("diffusivité D(theta)")
+plt.legend()
+plt.grid(True)
+plt.show()
+""", squelette="""
+h_abs = np.logspace(-1, 4, 300)     # |h| de 0,1 à 10 000 cm, grille logarithmique
+h_grille = -h_abs
 
-res = pd.DataFrame({nm: dict(lambda_c_quad=lambda_c(p), lambda_c_trapz=lambda_c_trapz(p), alpha_G=1 / lambda_c(p),
-                             theta_100=float(vg_theta(-100, p)), K_100=float(vg_K(-100, p)))
-                    for nm, p in SOLS.items()}).T
-display(res.round(4))
-""",
+plt.figure()
+for nom in ["sable", "loam", "argile"]:
+    s = sols.loc[nom]
+    K = vg_K(h_grille, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"])
+    plt.loglog(h_abs, K, label=nom)
+plt.ylim(1e-8, 1e3)
+plt.xlabel("|h| (cm)")
+plt.ylabel("K (cm/j)")
+plt.title("conductivité hydraulique K(h)")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# À COMPLÉTER : même graphique pour C(h) (plt.loglog)
+
+# À COMPLÉTER : diffusivité D = K / C en fonction de theta (plt.semilogy, plt.ylim(1e-1, 1e6))
+"""),
+            dict(titre="3. Longueur capillaire macroscopique", solution="""
+h_abs = np.logspace(-2, 4, 2000)     # grille logarithmique de |h| : 0,01 à 10 000 cm
+lambda_c = []
+alpha_G = []
+theta_100 = []
+K_100 = []
+for nom in sols.index:
+    s = sols.loc[nom]
+    K = vg_K(-h_abs, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"])
+    # intégrale de K/Ks par trapèzes, plus le segment [0 ; 0,01 cm] où K = Ks
+    lc = np.trapezoid(K / s["Ks"], h_abs) + 0.01
+    lambda_c.append(lc)
+    alpha_G.append(1 / lc)
+    theta_100.append(vg_theta(-100, s["thr"], s["ths"], s["alpha"], s["n"]))
+    K_100.append(vg_K(-100, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"]))
+sols["lambda_c"] = lambda_c
+sols["alpha_G"] = alpha_G
+sols["theta_100"] = theta_100
+sols["K_100"] = K_100
+print(sols.round(4))
+""", squelette="""
+h_abs = np.logspace(-2, 4, 2000)     # grille logarithmique de |h| : 0,01 à 10 000 cm
+lambda_c = []
+alpha_G = []
+theta_100 = []
+K_100 = []
+for nom in sols.index:
+    s = sols.loc[nom]
+    K = vg_K(-h_abs, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"])
+    # intégrale de K/Ks par trapèzes, plus le segment [0 ; 0,01 cm] où K = Ks
+    lc = # À COMPLÉTER (np.trapezoid)
+    lambda_c.append(lc)
+    alpha_G.append(# À COMPLÉTER)
+    theta_100.append(vg_theta(-100, s["thr"], s["ths"], s["alpha"], s["n"]))
+    K_100.append(vg_K(-100, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"]))
+sols["lambda_c"] = lambda_c
+sols["alpha_G"] = alpha_G
+sols["theta_100"] = theta_100
+sols["K_100"] = K_100
+print(sols.round(4))
+"""),
+        ],
         commentaire="""
 $K$ chute de 8 à 10 ordres de grandeur entre la saturation et $|h| = 10^4$ cm ; les courbes se croisent vers $|h| \\approx 30$–100 cm :
 au-delà, le sable est moins conducteur que l'argile. $\\lambda_c$ croît du sable (3,8 cm) au loam limoneux (9 cm) : la capillarité
@@ -185,101 +268,291 @@ gagne en importance dans les sols fins. La valeur MvG de l'argile ($n = 1{,}09$)
 non intégrable en pratique) : c'est une limite connue du modèle pour $n < 1{,}2$.
 """)
 
-    # ------------------------------------------------------------------ Ex 2
+    # ================================================================== Exercice 2
     nb.exercice(
         "Profils permanents au-dessus d'une nappe et évaporation maximale", duree="20 min",
         enonce="""
 En régime permanent le flux $q$ est constant et $\\dfrac{dh}{dz} = -1 - \\dfrac{q}{K(h)}$ ($z$ vers le haut, $q > 0$ vers le haut).
+On intègre cette équation **depuis la nappe** ($h = 0$ en $z = -L$) vers la surface par petits pas $dz$ (schéma d'Euler) :
+$h_{i+1} = h_i + \\left(-1 - \\dfrac{q}{K(h_i)}\\right) dz$.
 
-1. Écrire `profil_permanent(q, p, L=100)` qui intègre cette EDO avec `integrate.solve_ivp` depuis la nappe ($h = 0$ à $z = -L$)
-   jusqu'à la surface ($z = 0$), pour le loam et $q = -1$ cm/j (infiltration) puis $q = +0{,}03$ cm/j (évaporation).
-   Prévoir un événement terminal si $h < -10^4$ cm (le flux ne peut pas être maintenu).
-2. Lire `NOD_INF.OUT` des projets `J05_permanent_nappe_infiltration` et `J05_permanent_nappe_evaporation` (`read_nod_inf`),
-   extraire le profil à $t = 200$ j et le superposer à votre intégration ; calculer l'écart RMS sur $h$ et $h$ en surface
-   (attendu : $\\approx -28{,}6$ cm par intégration, $-28{,}9$ cm dans HYDRUS pour l'infiltration).
-3. Évaporation maximale : la profondeur de nappe maximale compatible avec un flux $q$ est
-   $L_{max}(q) = \\int_{-\\infty}^{0} \\dfrac{dh}{1 + q/K(h)}$ (Gardner 1958). Écrire `L_max(q, p)` (quadrature) puis
-   `e_max(p, L)` (`optimize.brentq` sur $L_{max}(q) - L$). Calculer $e_{max}$ du loam pour $L = 100$ cm (attendu $\\approx 0{,}054$ cm/j)
-   et tracer $e_{max}(L)$ pour $L$ de 30 à 300 cm pour le sable, le loam et le loam limoneux (échelles log).
+1. Loam, nappe à $L = 100$ cm, infiltration $q = -1$ cm/j : calculer le profil $h(z)$ avec $dz = 0{,}1$ cm et $h$ en surface
+   (attendu $\\approx -28{,}6$ cm).
+2. Même calcul pour l'évaporation $q = +0{,}03$ cm/j (attendu $h \\approx -138$ cm en surface).
+3. Lire `NOD_INF.OUT` des projets `J05_permanent_nappe_infiltration` et `J05_permanent_nappe_evaporation` (`read_nod_inf`),
+   extraire le profil à $t = 200$ j, le superposer à votre calcul et calculer l'écart RMS sur $h$ (HYDRUS : $h$ en surface
+   $= -28{,}9$ cm et $-135{,}2$ cm).
+4. Évaporation maximale : la profondeur de nappe maximale compatible avec un flux $q$ est
+   $L_{max}(q) = \\int_{-\\infty}^{0} \\dfrac{dh}{1 + q/K(h)} = \\int_{-\\infty}^{0} \\dfrac{K}{K + q}\\,dh$ (Gardner 1958).
+   Calculer $L_{max}$ par trapèzes, puis $e_{max}$ (le $q$ tel que $L_{max}(q) = L$, `brentq`) pour le loam et $L = 100$ cm
+   (attendu $\\approx 0{,}054$ cm/j).
+5. Tracer $e_{max}(L)$ pour $L$ de 30 à 300 cm pour le sable, le loam et le loam limoneux (échelles log) et estimer l'exposant
+   de la loi de puissance $e_{max} \\propto L^{-n}$ entre 70 et 200 cm.
 """,
-        squelette="""
-def profil_permanent(q, p, L=100.0):
-    \"\"\"Intègre dh/dz = -1 - q/K(h) de z = -L (h = 0) à z = 0. Retourne z, h.\"\"\"
-    f = lambda z, h: [-1.0 - q / vg_K(h[0], p)]
-    ev = lambda z, h: h[0] + 1e4; ev.terminal = True
-    # À COMPLÉTER : sol = integrate.solve_ivp(f, [-L, 0], [0.0], max_step=0.5, rtol=1e-8, atol=1e-10, events=ev)
-    pass
+        etapes=[
+            dict(titre="1. Profil d'infiltration permanente (q = −1 cm/j)", solution="""
+# paramètres du loam
+thr = sols.loc["loam", "thr"]
+ths = sols.loc["loam", "ths"]
+alpha = sols.loc["loam", "alpha"]
+n = sols.loc["loam", "n"]
+Ks = sols.loc["loam", "Ks"]
 
-# 1. profils loam pour q = -1 et q = +0.03
-# 2. comparaison avec HYDRUS : nod = read_nod_inf(f"{HYD}/J05_permanent_nappe_infiltration") ; nod[200.0][["Depth", "Head"]]
+L = 100.0      # profondeur de la nappe (cm)
+dz = 0.1       # pas d'intégration (cm)
+n_pas = round(L / dz)
+q = -1.0       # flux (cm/j), négatif = vers le bas (infiltration)
 
-# 3. évaporation maximale
-def L_max(q, p):
-    with np.errstate(divide="ignore"):
-        # À COMPLÉTER : integrate.quad(lambda h: 1/(1 + q/vg_K(h, p)), -1e7, 0, limit=500, points=[-1e5, -1e4, -1e3, -100, -10, -1])
-        pass
+# départ à la nappe (z = -L, h = 0) ; on monte vers la surface pas à pas
+z = -L
+h = 0.0
+z_inf = [z]
+h_inf = [h]
+for i in range(n_pas):
+    K = vg_K(h, thr, ths, alpha, n, Ks)
+    dh_dz = -1 - q / K
+    h = h + dh_dz * dz
+    z = z + dz
+    z_inf.append(z)
+    h_inf.append(h)
+z_inf = np.array(z_inf)
+h_inf = np.array(h_inf)
 
-def e_max(p, L):
-    # À COMPLÉTER : optimize.brentq(lambda q: L_max(q, p) - L, 1e-12, p[4])
-    pass
-""",
-        solution="""
-def profil_permanent(q, p, L=100.0):
-    \"\"\"Intègre dh/dz = -1 - q/K(h) depuis la nappe (h = 0 en z = -L) vers la surface. q > 0 vers le haut.\"\"\"
-    f = lambda z, h: [-1.0 - q / vg_K(h[0], p)]
-    ev = lambda z, h: h[0] + 1e4        # arrêt si h < -1e4 cm : le flux ne peut pas être entretenu
-    ev.terminal = True
-    sol = integrate.solve_ivp(f, [-L, 0.0], [0.0], max_step=0.5, rtol=1e-8, atol=1e-10, events=ev)
-    return sol.t, sol.y[0]
+print(f"infiltration q = {q} cm/j : h en surface = {h_inf[-1]:.2f} cm")
+print(f"h à 50 cm au-dessus de la nappe = {np.interp(-50, z_inf, h_inf):.2f} cm (gradient unitaire : K(h) = |q|)")
+""", squelette="""
+# paramètres du loam
+thr = sols.loc["loam", "thr"]
+ths = sols.loc["loam", "ths"]
+alpha = sols.loc["loam", "alpha"]
+n = sols.loc["loam", "n"]
+Ks = sols.loc["loam", "Ks"]
 
-p = SOLS["loam"]
-fig, ax = plt.subplots(1, 2, figsize=(11, 4.2), sharey=True)
-resultats = []
-for k, (tag, q) in enumerate([("infiltration", -1.0), ("evaporation", 0.03)]):
-    z, h = profil_permanent(q, p)
-    nod = read_nod_inf(f"{HYD}/J05_permanent_nappe_{tag}")
-    prof = nod[max(nod)]                                 # profil au dernier temps d'impression (200 j)
-    h_hyd = np.interp(prof["Depth"].to_numpy()[::-1], z, h)[::-1]   # intégration interpolée aux nœuds HYDRUS
-    rms = np.sqrt(np.mean((h_hyd - prof["Head"].to_numpy())**2))
-    resultats.append(dict(cas=tag, q=q, h_surface_python=h[-1], h_surface_hydrus=prof["Head"].iloc[0], RMS_h=rms))
-    ax[k].plot(h, z, label=f"solve_ivp, q = {q:+g} cm/j")
-    ax[k].plot(prof["Head"], prof["Depth"], "o", ms=3, mfc="none", label="HYDRUS-1D, t = 200 j")
-    ax[k].plot(-100 - np.linspace(-100, 0, 2), np.linspace(-100, 0, 2), "k:", lw=1, label="hydrostatique (t = 0)")
-    ax[k].set(xlabel="h (cm)", title=f"loam, nappe à 100 cm : {tag}")
-    ax[k].legend()
-ax[0].set_ylabel("z (cm)")
-plt.tight_layout(); plt.show()
-display(pd.DataFrame(resultats).round(3))
+L = 100.0      # profondeur de la nappe (cm)
+dz = 0.1       # pas d'intégration (cm)
+n_pas = round(L / dz)
+q = -1.0       # flux (cm/j), négatif = vers le bas (infiltration)
 
-# 3. évaporation maximale (Gardner 1958)
-def L_max(q, p):
-    \"\"\"Profondeur maximale de nappe capable d'entretenir le flux q (h -> -inf en surface).\"\"\"
-    with np.errstate(divide="ignore"):
-        return integrate.quad(lambda h: 1.0 / (1.0 + q / vg_K(h, p)), -1e7, 0, limit=500,
-                              points=[-1e5, -1e4, -1e3, -100, -10, -1])[0]
+# départ à la nappe (z = -L, h = 0) ; on monte vers la surface pas à pas
+z = -L
+h = 0.0
+z_inf = [z]
+h_inf = [h]
+for i in range(n_pas):
+    K = # À COMPLÉTER
+    dh_dz = # À COMPLÉTER
+    h = # À COMPLÉTER (schéma d'Euler)
+    z = z + dz
+    z_inf.append(z)
+    h_inf.append(h)
+z_inf = np.array(z_inf)
+h_inf = np.array(h_inf)
 
-def e_max(p, L):
-    \"\"\"Évaporation maximale (cm/j) depuis une nappe à la profondeur L (cm).\"\"\"
-    return optimize.brentq(lambda q: L_max(q, p) - L, 1e-12, p[4], xtol=1e-9, rtol=1e-8)
+print(f"infiltration q = {q} cm/j : h en surface = {h_inf[-1]:.2f} cm")
+print(f"h à 50 cm au-dessus de la nappe = {np.interp(-50, z_inf, h_inf):.2f} cm (gradient unitaire : K(h) = |q|)")
+"""),
+            dict(titre="2. Profil d'évaporation permanente (q = +0,03 cm/j)", solution="""
+q = 0.03       # flux (cm/j), positif = vers le haut (évaporation)
 
-print(f"e_max du loam, nappe à 100 cm : {e_max(SOLS['loam'], 100):.4f} cm/j")
-print("L_max pour q = 0.01, 0.03, 0.05, 0.10 cm/j :", [round(L_max(q, SOLS['loam']), 1) for q in (0.01, 0.03, 0.05, 0.10)])
+z = -L
+h = 0.0
+z_eva = [z]
+h_eva = [h]
+for i in range(n_pas):
+    K = vg_K(h, thr, ths, alpha, n, Ks)
+    dh_dz = -1 - q / K
+    h = h + dh_dz * dz
+    z = z + dz
+    z_eva.append(z)
+    h_eva.append(h)
+z_eva = np.array(z_eva)
+h_eva = np.array(h_eva)
 
-Ls = np.array([30, 50, 70, 100, 150, 200, 300])
-tab = pd.DataFrame({nm: [e_max(SOLS[nm], L) for L in Ls] for nm in ["sable", "loam", "loam limoneux"]}, index=Ls)
+print(f"évaporation q = {q} cm/j : h en surface = {h_eva[-1]:.2f} cm")
+""", squelette="""
+q = 0.03       # flux (cm/j), positif = vers le haut (évaporation)
+
+z = -L
+h = 0.0
+z_eva = [z]
+h_eva = [h]
+for i in range(n_pas):
+    K = # À COMPLÉTER
+    dh_dz = # À COMPLÉTER
+    h = # À COMPLÉTER
+    z = z + dz
+    z_eva.append(z)
+    h_eva.append(h)
+z_eva = np.array(z_eva)
+h_eva = np.array(h_eva)
+
+print(f"évaporation q = {q} cm/j : h en surface = {h_eva[-1]:.2f} cm")
+"""),
+            dict(titre="3. Comparaison avec les profils HYDRUS-1D à t = 200 j", solution="""
+nod_inf = read_nod_inf(HYD + "/J05_permanent_nappe_infiltration")
+nod_eva = read_nod_inf(HYD + "/J05_permanent_nappe_evaporation")
+print("temps d'impression (j) :", list(nod_inf.keys()))
+prof_inf = nod_inf[200.0]        # profil au dernier temps d'impression (régime permanent)
+prof_eva = nod_eva[200.0]
+print(prof_inf[["Depth", "Head", "Moisture", "K", "Flux"]].head())
+
+# h en surface d'après HYDRUS (noeud 1, Depth = 0)
+h_hyd_inf = prof_inf["Head"].iloc[0]
+h_hyd_eva = prof_eva["Head"].iloc[0]
+
+# profil calculé interpolé aux profondeurs des noeuds HYDRUS, puis écart RMS
+h_calc_inf = np.interp(prof_inf["Depth"], z_inf, h_inf)
+rms_inf = np.sqrt(np.mean((h_calc_inf - prof_inf["Head"]) ** 2))
+h_calc_eva = np.interp(prof_eva["Depth"], z_eva, h_eva)
+rms_eva = np.sqrt(np.mean((h_calc_eva - prof_eva["Head"]) ** 2))
+print(f"infiltration : h surface Euler = {h_inf[-1]:.2f} cm, HYDRUS = {h_hyd_inf:.2f} cm, écart RMS = {rms_inf:.3f} cm")
+print(f"évaporation : h surface Euler = {h_eva[-1]:.2f} cm, HYDRUS = {h_hyd_eva:.2f} cm, écart RMS = {rms_eva:.3f} cm")
+
+plt.figure()
+plt.plot(h_inf, z_inf, label="Euler, q = -1 cm/j")
+plt.plot(prof_inf["Head"], prof_inf["Depth"], "o", markersize=3, label="HYDRUS-1D, t = 200 j")
+plt.plot([0, -100], [-100, 0], "k:", label="hydrostatique (t = 0)")
+plt.xlabel("h (cm)")
+plt.ylabel("z (cm)")
+plt.title("loam, nappe à 100 cm : infiltration")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.figure()
+plt.plot(h_eva, z_eva, label="Euler, q = +0,03 cm/j")
+plt.plot(prof_eva["Head"], prof_eva["Depth"], "o", markersize=3, label="HYDRUS-1D, t = 200 j")
+plt.plot([0, -100], [-100, 0], "k:", label="hydrostatique (t = 0)")
+plt.xlabel("h (cm)")
+plt.ylabel("z (cm)")
+plt.title("loam, nappe à 100 cm : évaporation")
+plt.legend()
+plt.grid(True)
+plt.show()
+""", squelette="""
+nod_inf = read_nod_inf(HYD + "/J05_permanent_nappe_infiltration")
+nod_eva = read_nod_inf(HYD + "/J05_permanent_nappe_evaporation")
+print("temps d'impression (j) :", list(nod_inf.keys()))
+prof_inf = nod_inf[200.0]        # profil au dernier temps d'impression (régime permanent)
+prof_eva = nod_eva[200.0]
+print(prof_inf[["Depth", "Head", "Moisture", "K", "Flux"]].head())
+
+# h en surface d'après HYDRUS (noeud 1, Depth = 0)
+h_hyd_inf = prof_inf["Head"].iloc[0]
+h_hyd_eva = prof_eva["Head"].iloc[0]
+
+# profil calculé interpolé aux profondeurs des noeuds HYDRUS, puis écart RMS
+h_calc_inf = np.interp(prof_inf["Depth"], z_inf, h_inf)
+rms_inf = # À COMPLÉTER
+h_calc_eva = # À COMPLÉTER
+rms_eva = # À COMPLÉTER
+print(f"infiltration : h surface Euler = {h_inf[-1]:.2f} cm, HYDRUS = {h_hyd_inf:.2f} cm, écart RMS = {rms_inf:.3f} cm")
+print(f"évaporation : h surface Euler = {h_eva[-1]:.2f} cm, HYDRUS = {h_hyd_eva:.2f} cm, écart RMS = {rms_eva:.3f} cm")
+
+plt.figure()
+plt.plot(h_inf, z_inf, label="Euler, q = -1 cm/j")
+plt.plot(prof_inf["Head"], prof_inf["Depth"], "o", markersize=3, label="HYDRUS-1D, t = 200 j")
+plt.plot([0, -100], [-100, 0], "k:", label="hydrostatique (t = 0)")
+plt.xlabel("h (cm)")
+plt.ylabel("z (cm)")
+plt.title("loam, nappe à 100 cm : infiltration")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# À COMPLÉTER : même graphique pour l'évaporation
+"""),
+            dict(titre="4. Évaporation maximale depuis une nappe à 100 cm (Gardner 1958)", solution="""
+# profondeur maximale de nappe (cm) capable d'entretenir le flux q (cm/j) : L_max = intégrale de K/(K + q) dh
+def L_max(q, thr, ths, alpha, n, Ks):
+    h_abs = np.logspace(-2, 7, 4000)
+    K = vg_K(-h_abs, thr, ths, alpha, n, Ks)
+    L = np.trapezoid(K / (K + q), h_abs) + 0.01
+    return L
+
+# écart entre L_max(q) et la profondeur L de la nappe : il s'annule pour q = e_max
+def ecart_L(q, L, thr, ths, alpha, n, Ks):
+    return L_max(q, thr, ths, alpha, n, Ks) - L
+
+for q in [0.01, 0.03, 0.05, 0.10]:
+    print(f"loam, q = {q} cm/j : L_max = {L_max(q, thr, ths, alpha, n, Ks):.1f} cm")
+
+# brentq cherche q entre 1e-12 et Ks tel que ecart_L = 0 ; args = les autres arguments de ecart_L
+e_max_loam = brentq(ecart_L, 1e-12, Ks, args=(100.0, thr, ths, alpha, n, Ks))
+print(f"e_max du loam, nappe à 100 cm : {e_max_loam:.4f} cm/j")
+""", squelette="""
+# profondeur maximale de nappe (cm) capable d'entretenir le flux q (cm/j) : L_max = intégrale de K/(K + q) dh
+def L_max(q, thr, ths, alpha, n, Ks):
+    h_abs = np.logspace(-2, 7, 4000)
+    K = vg_K(-h_abs, thr, ths, alpha, n, Ks)
+    L = # À COMPLÉTER (np.trapezoid, plus le segment [0 ; 0,01 cm])
+    return L
+
+# écart entre L_max(q) et la profondeur L de la nappe : il s'annule pour q = e_max
+def ecart_L(q, L, thr, ths, alpha, n, Ks):
+    return # À COMPLÉTER
+
+for q in [0.01, 0.03, 0.05, 0.10]:
+    print(f"loam, q = {q} cm/j : L_max = {L_max(q, thr, ths, alpha, n, Ks):.1f} cm")
+
+# brentq cherche q entre 1e-12 et Ks tel que ecart_L = 0 ; args = les autres arguments de ecart_L
+e_max_loam = # À COMPLÉTER (brentq(ecart_L, 1e-12, Ks, args=(...)))
+print(f"e_max du loam, nappe à 100 cm : {e_max_loam:.4f} cm/j")
+"""),
+            dict(titre="5. Évaporation maximale en fonction de la profondeur de nappe", solution="""
+Ls = np.array([30, 50, 70, 100, 150, 200, 300])     # profondeurs de nappe (cm)
+tab = pd.DataFrame(index=Ls)
 tab.index.name = "L (cm)"
-display(tab.map(lambda v: f"{v:.2e}"))
-fig, ax = plt.subplots()
-for nm in tab.columns:
-    ax.loglog(Ls, tab[nm].clip(lower=1e-6), "o-", label=nm)
-ax.axhline(0.3, ls=":", color="gray"); ax.text(35, 0.35, "E_p typique ≈ 3 mm/j", fontsize=9, color="gray")
-ax.set(xlabel="profondeur de la nappe L (cm)", ylabel="e_max (cm/j)", ylim=(1e-4, 30)); ax.legend(); plt.show()
 
-# pente log-log : e_max ~ L^-n (Gardner)
-for nm in tab.columns:
-    n_fit = -np.polyfit(np.log(Ls[2:6]), np.log(tab[nm].to_numpy()[2:6]), 1)[0]
-    print(f"{nm:14s} : e_max ~ L^-{n_fit:.1f} entre 70 et 200 cm")
-""",
+plt.figure()
+for nom in ["sable", "loam", "loam limoneux"]:
+    s = sols.loc[nom]
+    e_max = []
+    for L in Ls:
+        e = brentq(ecart_L, 1e-12, s["Ks"], args=(L, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"]))
+        e_max.append(e)
+    tab[nom] = e_max
+    plt.loglog(Ls, e_max, "o-", label=nom)
+plt.axhline(0.3, color="gray", linestyle=":", label="demande E_p typique (3 mm/j)")
+plt.xlabel("profondeur de la nappe L (cm)")
+plt.ylabel("e_max (cm/j)")
+plt.legend()
+plt.grid(True)
+plt.show()
+print(tab)
+
+# exposant de la loi de puissance e_max ~ L^(-n) entre 70 et 200 cm (pente dans le plan log-log)
+for nom in ["sable", "loam", "loam limoneux"]:
+    pente = -(np.log(tab.loc[200, nom]) - np.log(tab.loc[70, nom])) / (np.log(200) - np.log(70))
+    print(f"{nom} : e_max ~ L^-{pente:.1f} entre 70 et 200 cm")
+""", squelette="""
+Ls = np.array([30, 50, 70, 100, 150, 200, 300])     # profondeurs de nappe (cm)
+tab = pd.DataFrame(index=Ls)
+tab.index.name = "L (cm)"
+
+plt.figure()
+for nom in ["sable", "loam", "loam limoneux"]:
+    s = sols.loc[nom]
+    e_max = []
+    for L in Ls:
+        e = # À COMPLÉTER (brentq avec les paramètres du sol s)
+        e_max.append(e)
+    tab[nom] = e_max
+    plt.loglog(Ls, e_max, "o-", label=nom)
+plt.axhline(0.3, color="gray", linestyle=":", label="demande E_p typique (3 mm/j)")
+plt.xlabel("profondeur de la nappe L (cm)")
+plt.ylabel("e_max (cm/j)")
+plt.legend()
+plt.grid(True)
+plt.show()
+print(tab)
+
+# exposant de la loi de puissance e_max ~ L^(-n) entre 70 et 200 cm (pente dans le plan log-log)
+for nom in ["sable", "loam", "loam limoneux"]:
+    pente = # À COMPLÉTER
+    print(f"{nom} : e_max ~ L^-{pente:.1f} entre 70 et 200 cm")
+"""),
+        ],
         commentaire="""
 Pour l'infiltration, le profil devient vertical (gradient unitaire) dès 40–50 cm au-dessus de la nappe, à $h \\approx -28{,}6$ cm
 tel que $K(h) = 1$ cm/j ; HYDRUS donne $-28{,}9$ cm (moyenne arithmétique de $K$ entre nœuds près de la nappe). Pour l'évaporation à
@@ -288,72 +561,274 @@ inférieure à une demande de 3 mm/j : l'évaporation est limitée par le sol. L
 $L^{-n}$ avec $n \\approx 3$ pour le loam, comme prévu par Gardner (1958).
 """)
 
-    # ------------------------------------------------------------------ Ex 3
+    # ================================================================== Exercice 3
     nb.exercice(
         "Lecture d'un projet HYDRUS-1D : convergence vers le régime permanent", duree="15 min",
         enonce="""
 Les deux projets `J05_permanent_nappe_*` partent d'un profil hydrostatique ($h = -100 - z$, $H = -100$ cm) et imposent un flux constant
 en surface (−1 cm/j ou +0,03 cm/j) avec une nappe fixe ($h = 0$) au bas d'une colonne de loam de 100 cm, pendant 200 j.
 
-1. Lire `T_LEVEL.OUT` (`read_tlevel`) et tracer `vTop`, `vBot` (flux en surface et au bas, > 0 vers le haut) et `hTop`
-   en fonction du temps pour les deux projets. Déterminer $t_{99}$, premier instant où $|$`vBot` − `vTop`$| < 1$ % de $|q|$.
-2. Lire `RUN_INF.OUT` (`read_run_inf`) : tracer $\\Delta t$ en fonction du temps (échelle log), l'histogramme du nombre
+1. Lire `T_LEVEL.OUT` des deux projets (`read_tlevel`) et tracer `vTop` et `vBot` (flux en surface et au bas, > 0 vers le haut)
+   en fonction du temps.
+2. Déterminer $t_{99}$, premier instant où $|$`vBot` − `vTop`$| < 1$ % de $|q|$.
+3. Tracer `hTop` (charge de pression en surface) en fonction du temps.
+4. Lire `OBS_NODE.OUT` (`read_obs_node`) et tracer $h(t)$ aux nœuds d'observation (10, 30, 50 et 80 cm).
+5. Lire `RUN_INF.OUT` (`read_run_inf`) : tracer $\\Delta t$ en fonction du temps (échelle log) et l'histogramme du nombre
    d'itérations par pas ; compter les pas et les itérations totales.
-3. Lire `BALANCE.OUT` (`read_balance`) : erreur relative maximale `WatBalR` (%) et évolution du stock `W-volume` ;
-   vérifier que la variation de stock entre 0 et 200 j est cohérente avec `sum(vTop)` − `sum(vBot)` de `T_LEVEL.OUT`
-   (attention aux signes : $\\Delta W = \\int (q_{bas} - q_{haut})\\,dt$ avec $q > 0$ vers le haut).
+6. Lire `BALANCE.OUT` (`read_balance`) : erreur relative maximale `WatBalR` (%) et variation du stock `W-volume` entre 0 et 200 j ;
+   vérifier qu'elle est cohérente avec `sum(vBot)` − `sum(vTop)` de `T_LEVEL.OUT`
+   ($\\Delta W = \\int (q_{bas} - q_{haut})\\,dt$ avec $q > 0$ vers le haut).
 """,
-        squelette="""
-fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-for k, tag in enumerate(["infiltration", "evaporation"]):
-    tl = read_tlevel(f"{HYD}/J05_permanent_nappe_{tag}")
-    # À COMPLÉTER : tracés de vTop, vBot ; t99
-    q = tl["vTop"].iloc[-1]
-    ecart = (tl["vBot"] - tl["vTop"]).abs()
-    t99 = # À COMPLÉTER
-    print(tag, "t99 =", t99)
+        etapes=[
+            dict(titre="Lecture des fichiers T_LEVEL.OUT", solution="""
+tl_inf = read_tlevel(HYD + "/J05_permanent_nappe_infiltration")
+tl_eva = read_tlevel(HYD + "/J05_permanent_nappe_evaporation")
+print("colonnes :", list(tl_inf.columns))
+print(tl_eva[["rTop", "vTop", "vBot", "hTop", "hBot", "sum(vTop)", "sum(vBot)"]].head())
+"""),
+            dict(titre="1. Flux en surface et au bas de la colonne", solution="""
+plt.figure()
+plt.plot(tl_inf.index, tl_inf["vTop"], label="vTop (surface)")
+plt.plot(tl_inf.index, tl_inf["vBot"], "--", label="vBot (nappe)")
+plt.xlim(0, 60)
+plt.xlabel("temps (j)")
+plt.ylabel("flux (cm/j, > 0 vers le haut)")
+plt.title("J05_permanent_nappe_infiltration")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# 2. RUN_INF.OUT : ri = read_run_inf(...) ; colonnes Time, dt, Iter, ItCum
-# 3. BALANCE.OUT : bal = read_balance(...) ; colonnes W-volume, WatBalT, WatBalR
-""",
-        solution="""
-fig, ax = plt.subplots(2, 2, figsize=(11, 7))
-bilans = []
-for k, tag in enumerate(["infiltration", "evaporation"]):
-    P = f"{HYD}/J05_permanent_nappe_{tag}"
-    tl = read_tlevel(P)
-    q = tl["rTop"].iloc[-1]
-    ecart = (tl["vBot"] - tl["vTop"]).abs()
-    t99 = tl.index[np.argmax(ecart.to_numpy() < 0.01 * abs(q))]
-    ax[0, k].plot(tl.index, tl["vTop"], label="vTop (surface)")
-    ax[0, k].plot(tl.index, tl["vBot"], "--", label="vBot (nappe)")
-    ax[0, k].axvline(t99, color="gray", ls=":", label=f"t99 = {t99:.1f} j")
-    ax[0, k].set(xlabel="temps (j)", ylabel="flux (cm/j, > 0 vers le haut)", title=f"J05_permanent_nappe_{tag}")
-    ax[0, k].set_xlim(0, 60 if tag == "infiltration" else 200); ax[0, k].legend()
-    ax[1, k].plot(tl.index, tl["hTop"]); ax[1, k].set(xlabel="temps (j)", ylabel="hTop (cm)", title="charge de pression en surface")
-    # 2. informations d'exécution
-    ri = read_run_inf(P)
-    # 3. bilan de masse
-    bal = read_balance(P)
-    dW_balance = bal["W-volume"].iloc[-1] - bal["W-volume"].iloc[0]
-    dW_flux = -(tl["sum(vTop)"].iloc[-1] - tl["sum(vBot)"].iloc[-1])    # dW/dt = q_bas - q_haut
-    bilans.append(dict(cas=tag, q=q, t99_j=t99, hTop_final=tl["hTop"].iloc[-1], n_pas=len(ri), iter_total=int(ri["Iter"].sum()),
-                       iter_moy=ri["Iter"].mean(), dt_min=ri["dt"].min(), dt_max=ri["dt"].max(),
-                       WatBalR_max_pct=bal["WatBalR"].abs().max(), W0=bal["W-volume"].iloc[0], W200=bal["W-volume"].iloc[-1],
-                       dW_balance=dW_balance, dW_flux_TLEVEL=dW_flux))
-plt.tight_layout(); plt.show()
-display(pd.DataFrame(bilans).set_index("cas").T)
+plt.figure()
+plt.plot(tl_eva.index, tl_eva["vTop"], label="vTop (surface)")
+plt.plot(tl_eva.index, tl_eva["vBot"], "--", label="vBot (nappe)")
+plt.xlabel("temps (j)")
+plt.ylabel("flux (cm/j, > 0 vers le haut)")
+plt.title("J05_permanent_nappe_evaporation")
+plt.legend()
+plt.grid(True)
+plt.show()
+""", squelette="""
+plt.figure()
+plt.plot(tl_inf.index, tl_inf["vTop"], label="vTop (surface)")
+plt.plot(tl_inf.index, tl_inf["vBot"], "--", label="vBot (nappe)")
+plt.xlim(0, 60)
+plt.xlabel("temps (j)")
+plt.ylabel("flux (cm/j, > 0 vers le haut)")
+plt.title("J05_permanent_nappe_infiltration")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# pas de temps et itérations
-fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
-for tag in ["infiltration", "evaporation"]:
-    ri = read_run_inf(f"{HYD}/J05_permanent_nappe_{tag}")
-    ax[0].semilogy(ri["Time"], ri["dt"], label=tag)
-    ax[1].hist(ri["Iter"], bins=np.arange(0.5, 10.5, 1), alpha=0.6, label=tag)
-ax[0].set(xlabel="temps (j)", ylabel="pas de temps dt (j)", title="RUN_INF.OUT : pas de temps"); ax[0].legend()
-ax[1].set(xlabel="itérations de Picard par pas", ylabel="nombre de pas", title="RUN_INF.OUT : itérations"); ax[1].legend()
-plt.tight_layout(); plt.show()
-""",
+# À COMPLÉTER : même graphique pour l'évaporation (tl_eva)
+"""),
+            dict(titre="2. Temps d'atteinte du régime permanent t99", solution="""
+# infiltration : flux imposé q = rTop ; écart entre les flux au bas et en surface
+q_inf = tl_inf["rTop"].iloc[-1]
+temps = tl_inf.index.to_numpy()
+ecart = np.abs(tl_inf["vBot"].to_numpy() - tl_inf["vTop"].to_numpy())
+seuil = 0.01 * abs(q_inf)
+instants = temps[ecart < seuil]       # tous les instants où l'écart est sous 1 % de |q|
+t99_inf = instants[0]
+print(f"infiltration : q = {q_inf} cm/j, t99 = {t99_inf} j")
+
+# évaporation
+q_eva = tl_eva["rTop"].iloc[-1]
+temps = tl_eva.index.to_numpy()
+ecart = np.abs(tl_eva["vBot"].to_numpy() - tl_eva["vTop"].to_numpy())
+seuil = 0.01 * abs(q_eva)
+instants = temps[ecart < seuil]
+t99_eva = instants[0]
+print(f"évaporation : q = {q_eva} cm/j, t99 = {t99_eva} j")
+""", squelette="""
+# infiltration : flux imposé q = rTop ; écart entre les flux au bas et en surface
+q_inf = tl_inf["rTop"].iloc[-1]
+temps = tl_inf.index.to_numpy()
+ecart = np.abs(tl_inf["vBot"].to_numpy() - tl_inf["vTop"].to_numpy())
+seuil = # À COMPLÉTER (1 % de |q|)
+instants = temps[ecart < seuil]       # tous les instants où l'écart est sous 1 % de |q|
+t99_inf = instants[0]
+print(f"infiltration : q = {q_inf} cm/j, t99 = {t99_inf} j")
+
+# évaporation
+q_eva = tl_eva["rTop"].iloc[-1]
+temps = tl_eva.index.to_numpy()
+ecart = # À COMPLÉTER
+seuil = # À COMPLÉTER
+instants = temps[ecart < seuil]
+t99_eva = instants[0]
+print(f"évaporation : q = {q_eva} cm/j, t99 = {t99_eva} j")
+"""),
+            dict(titre="3. Charge de pression en surface", solution="""
+plt.figure()
+plt.plot(tl_inf.index, tl_inf["hTop"], label="infiltration (q = -1 cm/j)")
+plt.plot(tl_eva.index, tl_eva["hTop"], label="évaporation (q = +0,03 cm/j)")
+plt.xlabel("temps (j)")
+plt.ylabel("hTop (cm)")
+plt.title("charge de pression en surface")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+hTop_inf = tl_inf["hTop"].iloc[-1]
+hTop_eva = tl_eva["hTop"].iloc[-1]
+print(f"hTop à 200 j : infiltration {hTop_inf:.2f} cm, évaporation {hTop_eva:.2f} cm")
+"""),
+            dict(titre="4. Charges de pression aux nœuds d'observation (OBS_NODE.OUT)", solution="""
+obs_inf = read_obs_node(HYD + "/J05_permanent_nappe_infiltration")
+obs_eva = read_obs_node(HYD + "/J05_permanent_nappe_evaporation")
+print(obs_eva.head(3))
+
+# noeuds 11, 31, 51, 81 = profondeurs 10, 30, 50, 80 cm (dz = 1 cm, noeud 1 en surface)
+plt.figure()
+for noeud in [11, 31, 51, 81]:
+    plt.plot(obs_inf.index, obs_inf[(noeud, "h")], label=f"noeud {noeud} ({noeud - 1} cm)")
+plt.xlim(0, 60)
+plt.xlabel("temps (j)")
+plt.ylabel("h (cm)")
+plt.title("infiltration : h aux noeuds d'observation")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.figure()
+for noeud in [11, 31, 51, 81]:
+    plt.plot(obs_eva.index, obs_eva[(noeud, "h")], label=f"noeud {noeud} ({noeud - 1} cm)")
+plt.xlabel("temps (j)")
+plt.ylabel("h (cm)")
+plt.title("évaporation : h aux noeuds d'observation")
+plt.legend()
+plt.grid(True)
+plt.show()
+""", squelette="""
+obs_inf = read_obs_node(HYD + "/J05_permanent_nappe_infiltration")
+obs_eva = read_obs_node(HYD + "/J05_permanent_nappe_evaporation")
+print(obs_eva.head(3))
+
+# noeuds 11, 31, 51, 81 = profondeurs 10, 30, 50, 80 cm (dz = 1 cm, noeud 1 en surface)
+plt.figure()
+for noeud in [11, 31, 51, 81]:
+    plt.plot(obs_inf.index, obs_inf[(noeud, "h")], label=f"noeud {noeud} ({noeud - 1} cm)")
+plt.xlim(0, 60)
+plt.xlabel("temps (j)")
+plt.ylabel("h (cm)")
+plt.title("infiltration : h aux noeuds d'observation")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# À COMPLÉTER : même graphique pour l'évaporation (obs_eva)
+"""),
+            dict(titre="5. Pas de temps et itérations (RUN_INF.OUT)", solution="""
+ri_inf = read_run_inf(HYD + "/J05_permanent_nappe_infiltration")
+ri_eva = read_run_inf(HYD + "/J05_permanent_nappe_evaporation")
+print(ri_inf.head(3))
+
+plt.figure()
+plt.semilogy(ri_inf["Time"], ri_inf["dt"], label="infiltration")
+plt.semilogy(ri_eva["Time"], ri_eva["dt"], label="évaporation")
+plt.xlabel("temps (j)")
+plt.ylabel("pas de temps dt (j)")
+plt.title("RUN_INF.OUT : pas de temps")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.figure()
+plt.hist(ri_inf["Iter"], bins=np.arange(0.5, 10.5, 1), alpha=0.6, label="infiltration")     # alpha = transparence
+plt.hist(ri_eva["Iter"], bins=np.arange(0.5, 10.5, 1), alpha=0.6, label="évaporation")
+plt.xlabel("itérations de Picard par pas")
+plt.ylabel("nombre de pas")
+plt.title("RUN_INF.OUT : itérations")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# nombre de pas, itérations totales et moyennes, pas de temps min et max
+n_pas_inf = len(ri_inf)
+iter_total_inf = ri_inf["Iter"].sum()
+iter_moy_inf = ri_inf["Iter"].mean()
+print(f"infiltration : {n_pas_inf} pas, {iter_total_inf:.0f} itérations ({iter_moy_inf:.2f} par pas), dt de {ri_inf['dt'].min()} à {ri_inf['dt'].max()} j")
+n_pas_eva = len(ri_eva)
+iter_total_eva = ri_eva["Iter"].sum()
+iter_moy_eva = ri_eva["Iter"].mean()
+print(f"évaporation : {n_pas_eva} pas, {iter_total_eva:.0f} itérations ({iter_moy_eva:.2f} par pas), dt de {ri_eva['dt'].min()} à {ri_eva['dt'].max()} j")
+""", squelette="""
+ri_inf = read_run_inf(HYD + "/J05_permanent_nappe_infiltration")
+ri_eva = read_run_inf(HYD + "/J05_permanent_nappe_evaporation")
+print(ri_inf.head(3))
+
+plt.figure()
+plt.semilogy(ri_inf["Time"], ri_inf["dt"], label="infiltration")
+plt.semilogy(ri_eva["Time"], ri_eva["dt"], label="évaporation")
+plt.xlabel("temps (j)")
+plt.ylabel("pas de temps dt (j)")
+plt.title("RUN_INF.OUT : pas de temps")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# À COMPLÉTER : histogramme du nombre d'itérations par pas (plt.hist, bins=np.arange(0.5, 10.5, 1)) pour les deux projets
+
+# nombre de pas, itérations totales et moyennes, pas de temps min et max
+n_pas_inf = # À COMPLÉTER
+iter_total_inf = # À COMPLÉTER
+iter_moy_inf = # À COMPLÉTER
+print(f"infiltration : {n_pas_inf} pas, {iter_total_inf:.0f} itérations ({iter_moy_inf:.2f} par pas), dt de {ri_inf['dt'].min()} à {ri_inf['dt'].max()} j")
+n_pas_eva = # À COMPLÉTER
+iter_total_eva = # À COMPLÉTER
+iter_moy_eva = # À COMPLÉTER
+print(f"évaporation : {n_pas_eva} pas, {iter_total_eva:.0f} itérations ({iter_moy_eva:.2f} par pas), dt de {ri_eva['dt'].min()} à {ri_eva['dt'].max()} j")
+"""),
+            dict(titre="6. Bilan de masse (BALANCE.OUT)", solution="""
+bal_inf = read_balance(HYD + "/J05_permanent_nappe_infiltration")
+bal_eva = read_balance(HYD + "/J05_permanent_nappe_evaporation")
+print(bal_eva[["W-volume", "Top Flux", "Bot Flux", "WatBalT", "WatBalR"]])
+
+# erreur relative maximale de bilan (%)
+WatBalR_inf = bal_inf["WatBalR"].abs().max()
+WatBalR_eva = bal_eva["WatBalR"].abs().max()
+print(f"WatBalR max : infiltration {WatBalR_inf:.3f} %, évaporation {WatBalR_eva:.3f} %")
+
+# variation du stock d'eau entre 0 et 200 j (cm) d'après BALANCE.OUT
+W0_inf = bal_inf["W-volume"].iloc[0]
+W200_inf = bal_inf["W-volume"].iloc[-1]
+dW_bilan_inf = W200_inf - W0_inf
+W0_eva = bal_eva["W-volume"].iloc[0]
+W200_eva = bal_eva["W-volume"].iloc[-1]
+dW_bilan_eva = W200_eva - W0_eva
+
+# d'après les flux cumulés de T_LEVEL.OUT : dW = sum(vBot) - sum(vTop)  (q > 0 vers le haut)
+dW_flux_inf = tl_inf["sum(vBot)"].iloc[-1] - tl_inf["sum(vTop)"].iloc[-1]
+dW_flux_eva = tl_eva["sum(vBot)"].iloc[-1] - tl_eva["sum(vTop)"].iloc[-1]
+
+print(f"infiltration : W0 = {W0_inf:.3f} cm, W200 = {W200_inf:.3f} cm, dW = {dW_bilan_inf:.3f} cm (BALANCE) et {dW_flux_inf:.3f} cm (flux cumulés)")
+print(f"évaporation : W0 = {W0_eva:.3f} cm, W200 = {W200_eva:.3f} cm, dW = {dW_bilan_eva:.3f} cm (BALANCE) et {dW_flux_eva:.3f} cm (flux cumulés)")
+""", squelette="""
+bal_inf = read_balance(HYD + "/J05_permanent_nappe_infiltration")
+bal_eva = read_balance(HYD + "/J05_permanent_nappe_evaporation")
+print(bal_eva[["W-volume", "Top Flux", "Bot Flux", "WatBalT", "WatBalR"]])
+
+# erreur relative maximale de bilan (%)
+WatBalR_inf = # À COMPLÉTER
+WatBalR_eva = # À COMPLÉTER
+print(f"WatBalR max : infiltration {WatBalR_inf:.3f} %, évaporation {WatBalR_eva:.3f} %")
+
+# variation du stock d'eau entre 0 et 200 j (cm) d'après BALANCE.OUT
+W0_inf = bal_inf["W-volume"].iloc[0]
+W200_inf = bal_inf["W-volume"].iloc[-1]
+dW_bilan_inf = # À COMPLÉTER
+W0_eva = bal_eva["W-volume"].iloc[0]
+W200_eva = bal_eva["W-volume"].iloc[-1]
+dW_bilan_eva = # À COMPLÉTER
+
+# d'après les flux cumulés de T_LEVEL.OUT : dW = sum(vBot) - sum(vTop)  (q > 0 vers le haut)
+dW_flux_inf = # À COMPLÉTER
+dW_flux_eva = # À COMPLÉTER
+
+print(f"infiltration : W0 = {W0_inf:.3f} cm, W200 = {W200_inf:.3f} cm, dW = {dW_bilan_inf:.3f} cm (BALANCE) et {dW_flux_inf:.3f} cm (flux cumulés)")
+print(f"évaporation : W0 = {W0_eva:.3f} cm, W200 = {W200_eva:.3f} cm, dW = {dW_bilan_eva:.3f} cm (BALANCE) et {dW_flux_eva:.3f} cm (flux cumulés)")
+"""),
+        ],
         commentaire="""
 Le régime permanent (à 1 % près) est atteint en ~11 j pour l'infiltration (l'eau infiltrée traverse un sol déjà humide) mais en
 ~75 j pour l'évaporation, car la diffusivité du sol qui sèche est très faible. Le pas de temps croît de 0,01 j à 1 j (borné par
@@ -362,7 +837,7 @@ inférieure à 0,01 % et la variation de stock (+5,1 cm en infiltration, −0,6 
 cumulés de `T_LEVEL.OUT`.
 """)
 
-    # ------------------------------------------------------------------ Ex 4
+    # ================================================================== Exercice 4
     nb.exercice(
         "Infiltromètre à disque : Wooding et méthode à deux tensions", duree="10 min",
         enonce="""
@@ -371,47 +846,127 @@ $r = 10$ cm aux tensions $h_0 = -3$ cm et $-10$ cm.
 
 Solution de Wooding (1968) avec $K = K_s e^{\\alpha_G h}$ : $Q = \\pi r^2 K(h_0)\\left(1 + \\dfrac{4}{\\pi r \\alpha_G}\\right)$.
 
-1. Pour chaque site, estimer $\\alpha_G = \\ln(Q_1/Q_2)/(h_1 - h_2)$, $\\lambda_c = 1/\\alpha_G$, puis $K_s$ (convertir $Q$ en cm³/j).
-2. Calculer la part du débit due à la capillarité latérale, $4/(\\pi r\\alpha_G) / (1 + 4/(\\pi r\\alpha_G))$, à $h_0 = -3$ cm.
+1. Pour chaque site, calculer $\\alpha_G = \\ln(Q_1/Q_2)/(h_1 - h_2)$, $\\lambda_c = 1/\\alpha_G$, puis $K_s$ (convertir $Q$ en cm³/j).
+2. Calculer la part du débit due à la capillarité latérale, $\\dfrac{4/(\\pi r\\alpha_G)}{1 + 4/(\\pi r\\alpha_G)}$, à $h_0 = -3$ cm.
 3. Comparer $K_s$ et $\\lambda_c$ aux valeurs de Carsel & Parrish de la texture (exercice 1) ; commenter les écarts.
 """,
-        squelette="""
+        etapes=[
+            dict(titre="Lecture des données", solution="""
 inf = pd.read_csv("data/J05_infiltrometre.csv")
-display(inf)
-h1, h2 = -3.0, -10.0
-Q1 = inf["Q_h3_cm3min"] * 1440      # cm3/j
-Q2 = inf["Q_h10_cm3min"] * 1440
+print(inf)
+"""),
+            dict(titre="1. Paramètres de Gardner par la méthode à deux tensions", solution="""
+h1 = -3.0       # première tension (cm)
+h2 = -10.0      # seconde tension (cm)
+Q1 = inf["Q_h3_cm3min"] * 1440      # débit à h1, converti en cm³/j
+Q2 = inf["Q_h10_cm3min"] * 1440     # débit à h2, cm³/j
 r = inf["r_cm"]
-inf["alpha_G"] = # À COMPLÉTER
-inf["lambda_c"] = # À COMPLÉTER
-inf["Ks"] = # À COMPLÉTER
-inf["part_capillaire_%"] = # À COMPLÉTER
-""",
-        solution="""
-inf = pd.read_csv("data/J05_infiltrometre.csv")
-h1, h2 = -3.0, -10.0
-Q1 = inf["Q_h3_cm3min"] * 1440      # cm3/j
-Q2 = inf["Q_h10_cm3min"] * 1440
-r = inf["r_cm"]
+
+# alpha_G (1/cm) et longueur capillaire (cm) : le rapport des débits ne dépend que de alpha_G
 inf["alpha_G"] = np.log(Q1 / Q2) / (h1 - h2)
 inf["lambda_c"] = 1 / inf["alpha_G"]
-geom = 1 + 4 / (np.pi * r * inf["alpha_G"])                      # facteur géométrique de Wooding
-inf["Ks"] = Q1 * np.exp(-inf["alpha_G"] * h1) / (np.pi * r**2 * geom)
-inf["part_capillaire_%"] = 100 * (geom - 1) / geom
-inf["Ks_CarselParrish"] = [SOLS[t][4] for t in inf["texture"]]
-inf["lambda_c_MvG"] = [lambda_c(SOLS[t]) for t in inf["texture"]]
-inf["K(-10)_Gardner"] = inf["Ks"] * np.exp(inf["alpha_G"] * (-10))
-inf["K(-10)_MvG"] = [float(vg_K(-10, SOLS[t])) for t in inf["texture"]]
-display(inf.round(3))
 
-fig, ax = plt.subplots()
-for _, s in inf.iterrows():
-    hh = np.linspace(-15, 0, 50)
-    ax.semilogy(hh, s["Ks"] * np.exp(s["alpha_G"] * hh), label=f"site {s['site']} ({s['texture']}) : Gardner")
-    ax.plot([h1, h2], [s["Ks"] * np.exp(s["alpha_G"] * h1), s["Ks"] * np.exp(s["alpha_G"] * h2)], "ko", ms=4)
-ax.set(xlabel="h (cm)", ylabel="K(h) (cm/j)", title="K(h) de Gardner estimée par la méthode à deux tensions"); ax.legend(fontsize=8)
+# facteur géométrique de Wooding, puis Ks en extrapolant K(h1) à h = 0
+geom = 1 + 4 / (np.pi * r * inf["alpha_G"])
+inf["Ks"] = Q1 * np.exp(-inf["alpha_G"] * h1) / (np.pi * r ** 2 * geom)
+print(inf[["site", "texture", "alpha_G", "lambda_c", "Ks"]].round(3))
+""", squelette="""
+h1 = -3.0       # première tension (cm)
+h2 = -10.0      # seconde tension (cm)
+Q1 = inf["Q_h3_cm3min"] * 1440      # débit à h1, converti en cm³/j
+Q2 = inf["Q_h10_cm3min"] * 1440     # débit à h2, cm³/j
+r = inf["r_cm"]
+
+# alpha_G (1/cm) et longueur capillaire (cm) : le rapport des débits ne dépend que de alpha_G
+inf["alpha_G"] = # À COMPLÉTER
+inf["lambda_c"] = # À COMPLÉTER
+
+# facteur géométrique de Wooding, puis Ks en extrapolant K(h1) à h = 0
+geom = # À COMPLÉTER
+inf["Ks"] = # À COMPLÉTER
+print(inf[["site", "texture", "alpha_G", "lambda_c", "Ks"]].round(3))
+"""),
+            dict(titre="2. Part du débit due à la capillarité latérale", solution="""
+# part (%) du débit à h0 = -3 cm qui est due à la capillarité latérale : (geom - 1) / geom
+inf["part_capillaire_%"] = 100 * (geom - 1) / geom
+print(inf[["site", "texture", "part_capillaire_%"]].round(1))
+""", squelette="""
+# part (%) du débit à h0 = -3 cm qui est due à la capillarité latérale : (geom - 1) / geom
+inf["part_capillaire_%"] = # À COMPLÉTER
+print(inf[["site", "texture", "part_capillaire_%"]].round(1))
+"""),
+            dict(titre="3. Comparaison avec les valeurs de Carsel & Parrish", solution="""
+Ks_CP = []
+lambda_c_MvG = []
+K10_Gardner = []
+K10_MvG = []
+for i in range(len(inf)):
+    texture = inf.loc[i, "texture"]
+    s = sols.loc[texture]
+    Ks_CP.append(s["Ks"])
+    lambda_c_MvG.append(s["lambda_c"])
+    # K(-10 cm) selon Gardner (terrain) et selon Mualem–van Genuchten (catalogue)
+    K10_Gardner.append(inf.loc[i, "Ks"] * np.exp(inf.loc[i, "alpha_G"] * (-10)))
+    K10_MvG.append(vg_K(-10, s["thr"], s["ths"], s["alpha"], s["n"], s["Ks"]))
+inf["Ks_CarselParrish"] = Ks_CP
+inf["lambda_c_MvG"] = lambda_c_MvG
+inf["K10_Gardner"] = K10_Gardner
+inf["K10_MvG"] = K10_MvG
+colonnes = ["site", "texture", "Ks", "Ks_CarselParrish", "lambda_c", "lambda_c_MvG", "K10_Gardner", "K10_MvG"]
+print(inf[colonnes].round(3))
+
+# courbes K(h) de Gardner estimées sur chaque site, avec les deux points de mesure
+h_grille = np.linspace(-15, 0, 50)
+plt.figure()
+for i in range(len(inf)):
+    Ks_site = inf.loc[i, "Ks"]
+    aG_site = inf.loc[i, "alpha_G"]
+    etiquette = "site " + inf.loc[i, "site"] + " (" + inf.loc[i, "texture"] + ")"
+    plt.semilogy(h_grille, Ks_site * np.exp(aG_site * h_grille), label=etiquette)
+    plt.plot([h1, h2], [Ks_site * np.exp(aG_site * h1), Ks_site * np.exp(aG_site * h2)], "ko", markersize=4)
+plt.xlabel("h (cm)")
+plt.ylabel("K(h) (cm/j)")
+plt.title("K(h) de Gardner estimée par la méthode à deux tensions")
+plt.legend()
+plt.grid(True)
 plt.show()
-""",
+""", squelette="""
+Ks_CP = []
+lambda_c_MvG = []
+K10_Gardner = []
+K10_MvG = []
+for i in range(len(inf)):
+    texture = inf.loc[i, "texture"]
+    s = sols.loc[texture]
+    Ks_CP.append(s["Ks"])
+    lambda_c_MvG.append(s["lambda_c"])
+    # K(-10 cm) selon Gardner (terrain) et selon Mualem–van Genuchten (catalogue)
+    K10_Gardner.append(# À COMPLÉTER)
+    K10_MvG.append(# À COMPLÉTER)
+inf["Ks_CarselParrish"] = Ks_CP
+inf["lambda_c_MvG"] = lambda_c_MvG
+inf["K10_Gardner"] = K10_Gardner
+inf["K10_MvG"] = K10_MvG
+colonnes = ["site", "texture", "Ks", "Ks_CarselParrish", "lambda_c", "lambda_c_MvG", "K10_Gardner", "K10_MvG"]
+print(inf[colonnes].round(3))
+
+# courbes K(h) de Gardner estimées sur chaque site, avec les deux points de mesure
+h_grille = np.linspace(-15, 0, 50)
+plt.figure()
+for i in range(len(inf)):
+    Ks_site = inf.loc[i, "Ks"]
+    aG_site = inf.loc[i, "alpha_G"]
+    etiquette = "site " + inf.loc[i, "site"] + " (" + inf.loc[i, "texture"] + ")"
+    plt.semilogy(h_grille, Ks_site * np.exp(aG_site * h_grille), label=etiquette)
+    plt.plot([h1, h2], [Ks_site * np.exp(aG_site * h1), Ks_site * np.exp(aG_site * h2)], "ko", markersize=4)
+plt.xlabel("h (cm)")
+plt.ylabel("K(h) (cm/j)")
+plt.title("K(h) de Gardner estimée par la méthode à deux tensions")
+plt.legend()
+plt.grid(True)
+plt.show()
+"""),
+        ],
         commentaire="""
 Le facteur géométrique $1 + 4/(\\pi r \\alpha_G)$ vaut 1,4 (sable) à 2,1 (loam limoneux) : négliger la capillarité latérale
 surestimerait $K$ de 40 à 110 %. Les $K_s$ « de terrain » diffèrent du catalogue d'un facteur 0,7 à 1,4 (variabilité typique,
@@ -419,37 +974,69 @@ souvent bien plus au champ) alors que $\\lambda_c$ est retrouvée à ±20 % : la
 Rappel : ces mesures excluent les macropores ($h_0 < 0$) ; $K_s$ estimée par extrapolation à $h = 0$ est celle de la matrice.
 """)
 
-    # ------------------------------------------------------------------ Bonus
+    # ================================================================== Bonus
     nb.exercice(
         "Bonus — solution analytique de Gardner pour l'évaporation maximale", duree="facultatif",
         enonce="""
-Pour $K = K_s e^{\\alpha_G h}$, montrer que $L_{max}(q) = \\dfrac{1}{\\alpha_G}\\ln\\!\\left(1 + \\dfrac{K_s}{q}\\right)$ et donc
+Pour $K = K_s e^{\\alpha_G h}$, on montre que $L_{max}(q) = \\dfrac{1}{\\alpha_G}\\ln\\!\\left(1 + \\dfrac{K_s}{q}\\right)$ et donc
 $e_{max}(L) = \\dfrac{K_s}{e^{\\alpha_G L} - 1}$. Calculer $e_{max}$ du loam ($K_s = 24{,}96$ cm/j, $\\alpha_G = 1/\\lambda_c$) pour
 $L = 30, 50, 100$ cm et comparer aux valeurs MvG de l'exercice 2. D'où vient l'écart ?
 """,
-        squelette="""
-p = SOLS["loam"]
-aG = 1 / lambda_c(p)
+        etapes=[
+            dict(titre="e_max de Gardner et de Mualem–van Genuchten", solution="""
+# paramètres du loam ; alpha_G = 1 / lambda_c (exercice 1)
+thr = sols.loc["loam", "thr"]
+ths = sols.loc["loam", "ths"]
+alpha = sols.loc["loam", "alpha"]
+n = sols.loc["loam", "n"]
+Ks = sols.loc["loam", "Ks"]
+aG = sols.loc["loam", "alpha_G"]
+
+# L_max = intégrale de dh / (1 + (q/Ks) e^(-aG h)) ; avec u = e^(aG h) : L_max = ln(1 + Ks/q) / aG, donc e_max = Ks / (e^(aG L) - 1)
 for L in [30, 50, 100]:
-    e_gardner = # À COMPLÉTER
-    print(L, e_gardner, e_max(p, L))
-""",
-        solution="""
-p = SOLS["loam"]
-aG = 1 / lambda_c(p)
-# L_max = int_{-inf}^0 dh / (1 + (q/Ks) e^{-aG h}) : poser u = e^{aG h} -> L_max = (1/aG) ln(1 + Ks/q)
-rows = []
-for L in [30, 50, 100]:
-    rows.append(dict(L_cm=L, e_max_Gardner=p[4] / (np.exp(aG * L) - 1), e_max_MvG=e_max(p, L)))
-display(pd.DataFrame(rows).set_index("L_cm").map(lambda v: f"{v:.3e}"))
+    e_gardner = Ks / (np.exp(aG * L) - 1)
+    e_mvg = brentq(ecart_L, 1e-12, Ks, args=(L, thr, ths, alpha, n, Ks))
+    print(f"L = {L:3d} cm : e_max Gardner = {e_gardner:.3e} cm/j, e_max MvG = {e_mvg:.3e} cm/j")
 
 # comparaison des deux K(h) sur la gamme utile
-hh = -np.logspace(0, 3, 200)
-fig, ax = plt.subplots()
-ax.loglog(-hh, vg_K(hh, p), label="Mualem–van Genuchten")
-ax.loglog(-hh, p[4] * np.exp(aG * hh), "--", label=f"Gardner, alpha_G = {aG:.3f} 1/cm")
-ax.set(xlabel="|h| (cm)", ylabel="K (cm/j)", ylim=(1e-8, 1e2)); ax.legend(); plt.show()
-""",
+h_abs = np.logspace(0, 3, 200)
+plt.figure()
+plt.loglog(h_abs, vg_K(-h_abs, thr, ths, alpha, n, Ks), label="Mualem–van Genuchten")
+plt.loglog(h_abs, Ks * np.exp(-aG * h_abs), "--", label=f"Gardner, alpha_G = {aG:.3f} 1/cm")
+plt.ylim(1e-8, 1e2)
+plt.xlabel("|h| (cm)")
+plt.ylabel("K (cm/j)")
+plt.legend()
+plt.grid(True)
+plt.show()
+""", squelette="""
+# paramètres du loam ; alpha_G = 1 / lambda_c (exercice 1)
+thr = sols.loc["loam", "thr"]
+ths = sols.loc["loam", "ths"]
+alpha = sols.loc["loam", "alpha"]
+n = sols.loc["loam", "n"]
+Ks = sols.loc["loam", "Ks"]
+aG = sols.loc["loam", "alpha_G"]
+
+# L_max = intégrale de dh / (1 + (q/Ks) e^(-aG h)) ; avec u = e^(aG h) : L_max = ln(1 + Ks/q) / aG, donc e_max = Ks / (e^(aG L) - 1)
+for L in [30, 50, 100]:
+    e_gardner = # À COMPLÉTER
+    e_mvg = brentq(ecart_L, 1e-12, Ks, args=(L, thr, ths, alpha, n, Ks))
+    print(f"L = {L:3d} cm : e_max Gardner = {e_gardner:.3e} cm/j, e_max MvG = {e_mvg:.3e} cm/j")
+
+# comparaison des deux K(h) sur la gamme utile
+h_abs = np.logspace(0, 3, 200)
+plt.figure()
+plt.loglog(h_abs, vg_K(-h_abs, thr, ths, alpha, n, Ks), label="Mualem–van Genuchten")
+plt.loglog(h_abs, Ks * np.exp(-aG * h_abs), "--", label=f"Gardner, alpha_G = {aG:.3f} 1/cm")
+plt.ylim(1e-8, 1e2)
+plt.xlabel("|h| (cm)")
+plt.ylabel("K (cm/j)")
+plt.legend()
+plt.grid(True)
+plt.show()
+"""),
+        ],
         commentaire="""
 Le modèle exponentiel sous-estime $e_{max}$ de plusieurs ordres de grandeur dès que $L > 50$ cm : sa conductivité décroît
 beaucoup plus vite que la loi de puissance de MvG ($K \\propto |h|^{-3{,}4}$ pour le loam loin de la saturation), or c'est la

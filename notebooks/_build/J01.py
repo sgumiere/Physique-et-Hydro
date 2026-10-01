@@ -1,4 +1,4 @@
-"""Source des notebooks du Jour 1 — phase solide et relations masse–volume."""
+"""Source des notebooks du Jour 1 — phase solide et relations masse–volume (style linéaire)."""
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -50,13 +50,13 @@ Les données sont dans le dossier `data/`. Exécutez la cellule suivante pour im
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy import optimize, special
+from scipy.optimize import curve_fit, brentq
+from scipy.special import erf
 
-plt.rcParams.update({"figure.figsize": (7, 4), "axes.grid": True, "grid.alpha": 0.3})
-RHO_W = 1.0   # g/cm³
+rho_w = 1.0   # masse volumique de l'eau, g/cm³
 """)
 
-    # ------------------------------------------------------------------ Ex 1
+    # ================================================================== Exercice 1
     nb.exercice(
         "Relations masse–volume", duree="15 min",
         enonce="""
@@ -66,220 +66,384 @@ masse sèche $M_s$ (105 °C, 24 h), masse volumique des solides $\\rho_s$.
 
 1. Calculer $\\rho_b$, $w$, $\\theta$, $n$, $e$, $S$ et $\\theta_a$ pour chaque échantillon. Rappels :
    $\\rho_b = M_s/V_t$, $w = M_w/M_s$, $\\theta = w\\,\\rho_b/\\rho_w$, $n = 1-\\rho_b/\\rho_s$, $e = n/(1-n)$, $S = \\theta/n$, $\\theta_a = n-\\theta$.
-2. Comparer les deux parcelles (moyennes par parcelle, boîtes à moustaches de $\\rho_b$ et $\\theta_a$).
+2. Comparer les deux parcelles (moyennes par parcelle, graphique de $\\rho_b$ et $\\theta_a$ en fonction de la profondeur).
    La parcelle trafiquée est-elle compactée ? Quels échantillons ont $\\theta_a < 0{,}10$ ?
 3. Calculer le stock d'eau (mm) du profil 0–60 cm de chaque parcelle, chaque échantillon représentant une tranche de 10 cm.
 """,
-        squelette="""
+        etapes=[
+            dict(titre="Lecture des données", solution="""
 df = pd.read_csv("data/J01_echantillons.csv")
-df.head()
+print(df)
+"""),
+            dict(titre="1. Relations masse–volume", solution="""
+# masse d'eau = masse humide - masse sèche
+df["M_w"] = df["M_t_g"] - df["M_s_g"]
 
-# 1. relations masse-volume
-df["M_w"]   = df["M_t_g"] - df["M_s_g"]
+# masse volumique apparente (g/cm³) et teneur en eau massique (-)
+df["rho_b"] = df["M_s_g"] / df["V_t_cm3"]
+df["w"] = df["M_w"] / df["M_s_g"]
+
+# teneur en eau volumique, porosité, indice des vides, saturation, porosité d'aération
+df["theta"] = df["w"] * df["rho_b"] / rho_w
+df["n"] = 1 - df["rho_b"] / df["rho_s_gcm3"]
+df["e"] = df["n"] / (1 - df["n"])
+df["S"] = df["theta"] / df["n"]
+df["theta_a"] = df["n"] - df["theta"]
+
+colonnes = ["id", "parcelle", "profondeur_cm", "rho_b", "w", "theta", "n", "e", "S", "theta_a"]
+print(df[colonnes].round(3))
+""", squelette="""
+# masse d'eau = masse humide - masse sèche
+df["M_w"] = df["M_t_g"] - df["M_s_g"]
+
+# masse volumique apparente (g/cm³) et teneur en eau massique (-)
 df["rho_b"] = # À COMPLÉTER
-df["w"]     = # À COMPLÉTER
+df["w"] = # À COMPLÉTER
+
+# teneur en eau volumique, porosité, indice des vides, saturation, porosité d'aération
 df["theta"] = # À COMPLÉTER
-df["n"]     = # À COMPLÉTER
-df["e"]     = # À COMPLÉTER
-df["S"]     = # À COMPLÉTER
+df["n"] = # À COMPLÉTER
+df["e"] = # À COMPLÉTER
+df["S"] = # À COMPLÉTER
 df["theta_a"] = # À COMPLÉTER
 
-# 2. comparaison des parcelles
-# df.groupby("parcelle")[["rho_b", "n", "theta", "theta_a"]].mean()
-# df.boxplot(column=["rho_b", "theta_a"], by="parcelle")
+colonnes = ["id", "parcelle", "profondeur_cm", "rho_b", "w", "theta", "n", "e", "S", "theta_a"]
+print(df[colonnes].round(3))
+"""),
+            dict(titre="2. Comparaison des deux parcelles", solution="""
+# moyennes par parcelle
+moyennes = df.groupby("parcelle")[["rho_b", "n", "theta", "theta_a"]].mean()
+print(moyennes.round(3))
 
-# 3. stock d'eau 0-60 cm (mm) : somme de theta_i * 100 mm
-""",
-        solution="""
-df = pd.read_csv("data/J01_echantillons.csv")
+# profondeur du milieu de chaque tranche (cm) pour le graphique
+df["z_cm"] = [5, 15, 25, 35, 45, 55, 5, 15, 25, 35, 45, 55]
+temoin = df[df["parcelle"] == "temoin"]
+trafiquee = df[df["parcelle"] == "trafiquee"]
 
-# 1. relations masse-volume
-df["M_w"]     = df["M_t_g"] - df["M_s_g"]
-df["rho_b"]   = df["M_s_g"] / df["V_t_cm3"]
-df["w"]       = df["M_w"] / df["M_s_g"]
-df["theta"]   = df["w"] * df["rho_b"] / RHO_W
-df["n"]       = 1 - df["rho_b"] / df["rho_s_gcm3"]
-df["e"]       = df["n"] / (1 - df["n"])
-df["S"]       = df["theta"] / df["n"]
-df["theta_a"] = df["n"] - df["theta"]
-cols = ["id", "parcelle", "profondeur_cm", "rho_b", "w", "theta", "n", "e", "S", "theta_a"]
-display(df[cols].round(3))
+plt.figure()
+plt.plot(temoin["rho_b"], temoin["z_cm"], "o-", label="témoin")
+plt.plot(trafiquee["rho_b"], trafiquee["z_cm"], "s-", label="trafiquée")
+plt.gca().invert_yaxis()
+plt.xlabel("masse volumique apparente rho_b (g/cm³)")
+plt.ylabel("profondeur (cm)")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# 2. comparaison des parcelles
-print(df.groupby("parcelle")[["rho_b", "n", "theta", "theta_a"]].mean().round(3))
-fig, ax = plt.subplots(1, 2, figsize=(9, 3.6))
-df.boxplot(column="rho_b", by="parcelle", ax=ax[0]); ax[0].set_title("masse volumique apparente (g/cm³)")
-df.boxplot(column="theta_a", by="parcelle", ax=ax[1]); ax[1].set_title("porosité d'aération (-)")
-ax[1].axhline(0.10, color="crimson", ls="--", label="seuil 0,10"); ax[1].legend()
-fig.suptitle("")
-plt.tight_layout(); plt.show()
-print("Échantillons avec theta_a < 0,10 :", df.loc[df["theta_a"] < 0.10, "id"].tolist())
+plt.figure()
+plt.plot(temoin["theta_a"], temoin["z_cm"], "o-", label="témoin")
+plt.plot(trafiquee["theta_a"], trafiquee["z_cm"], "s-", label="trafiquée")
+plt.axvline(0.10, color="red", linestyle="--", label="seuil 0,10")
+plt.gca().invert_yaxis()
+plt.xlabel("porosité d'aération theta_a (-)")
+plt.ylabel("profondeur (cm)")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# 3. stock d'eau 0-60 cm (mm) : chaque échantillon représente 100 mm de sol
-stock = df.groupby("parcelle")["theta"].sum() * 100
-print("Stock d'eau 0-60 cm (mm) :"); print(stock.round(1))
-""",
+# échantillons mal aérés
+mal_aeres = df[df["theta_a"] < 0.10]
+print("Échantillons avec theta_a < 0,10 :", list(mal_aeres["id"]))
+""", squelette="""
+# moyennes par parcelle
+moyennes = # À COMPLÉTER (groupby sur "parcelle", moyenne de rho_b, n, theta, theta_a)
+print(moyennes.round(3))
+
+# profondeur du milieu de chaque tranche (cm) pour le graphique
+df["z_cm"] = [5, 15, 25, 35, 45, 55, 5, 15, 25, 35, 45, 55]
+temoin = df[df["parcelle"] == "temoin"]
+trafiquee = df[df["parcelle"] == "trafiquee"]
+
+plt.figure()
+plt.plot(temoin["rho_b"], temoin["z_cm"], "o-", label="témoin")
+plt.plot(trafiquee["rho_b"], trafiquee["z_cm"], "s-", label="trafiquée")
+plt.gca().invert_yaxis()
+plt.xlabel("masse volumique apparente rho_b (g/cm³)")
+plt.ylabel("profondeur (cm)")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# À COMPLÉTER : même graphique pour theta_a, avec le seuil 0,10 (plt.axvline)
+
+# échantillons mal aérés
+mal_aeres = # À COMPLÉTER
+print("Échantillons avec theta_a < 0,10 :", list(mal_aeres["id"]))
+"""),
+            dict(titre="3. Stock d'eau du profil 0–60 cm", solution="""
+# chaque échantillon représente une tranche de 100 mm : stock = somme de theta * 100 mm
+stock_temoin = temoin["theta"].sum() * 100
+stock_trafiquee = trafiquee["theta"].sum() * 100
+print("Stock d'eau 0-60 cm, témoin    :", round(stock_temoin, 1), "mm")
+print("Stock d'eau 0-60 cm, trafiquée :", round(stock_trafiquee, 1), "mm")
+""", squelette="""
+# chaque échantillon représente une tranche de 100 mm : stock = somme de theta * 100 mm
+stock_temoin = # À COMPLÉTER
+stock_trafiquee = # À COMPLÉTER
+print("Stock d'eau 0-60 cm, témoin    :", round(stock_temoin, 1), "mm")
+print("Stock d'eau 0-60 cm, trafiquée :", round(stock_trafiquee, 1), "mm")
+"""),
+        ],
         commentaire="""
 La parcelle trafiquée a une $\\rho_b$ supérieure d'environ 0,2 g/cm³ et une porosité inférieure de ~0,08 ; à teneur en eau
 comparable, sa porosité d'aération tombe sous le seuil de 0,10 pour plusieurs échantillons : c'est le diagnostic classique de la compaction.
 Le stock d'eau est exprimé en mm pour être comparé directement aux pluies et à l'ET (voir Jour 8).
 """)
 
-    # ------------------------------------------------------------------ Ex 2
+    # ================================================================== Exercice 2
     nb.exercice(
         "Courbes granulométriques", duree="15 min",
         enonce="""
 `data/J01_granulometrie.csv` donne le pourcentage passant (masse cumulée) en fonction du diamètre pour trois sols A, B, C.
 
 1. Tracer les trois courbes cumulées (axe des diamètres en échelle logarithmique).
-2. Écrire une fonction `D_x(d, p, x)` qui retourne, par **interpolation linéaire en $\\log d$**, le diamètre pour lequel $x$ % de
-   la masse est plus fine. Calculer $D_{10}$, $D_{30}$, $D_{50}$, $D_{60}$, puis $C_u = D_{60}/D_{10}$ et $C_c = D_{30}^2/(D_{10} D_{60})$.
+2. Calculer, par **interpolation linéaire en $\\log d$**, les diamètres $D_{10}$, $D_{30}$, $D_{50}$, $D_{60}$ de chaque sol,
+   puis $C_u = D_{60}/D_{10}$ et $C_c = D_{30}^2/(D_{10} D_{60})$.
 3. Calculer les fractions argile/limon/sable selon l'USDA (2 µm, 50 µm) et selon ISO (2 µm, 63 µm).
 4. Ajuster une loi log-normale $F(d) = \\tfrac12[1+\\mathrm{erf}((\\ln d - \\ln d_g)/(\\sqrt2 \\ln\\sigma_g))]$ sur le sol A
-   (`scipy.optimize.curve_fit`) et superposer la courbe ajustée.
+   (`curve_fit`) et superposer la courbe ajustée.
 """,
-        squelette="""
+        etapes=[
+            dict(titre="Lecture des données", solution="""
 g = pd.read_csv("data/J01_granulometrie.csv")
-d = g["d_mm"].to_numpy()
-
-# 1. tracé
-fig, ax = plt.subplots()
-for sol in ["sol_A_pct", "sol_B_pct", "sol_C_pct"]:
-    ax.semilogx(d, g[sol], "o-", label=sol[:5])
-ax.set_xlabel("d (mm)"); ax.set_ylabel("% passant"); ax.legend()
-
-# 2. diamètres caractéristiques
+d = g["d_mm"].to_numpy()          # diamètres (mm)
+pA = g["sol_A_pct"].to_numpy()    # % passant du sol A
+pB = g["sol_B_pct"].to_numpy()
+pC = g["sol_C_pct"].to_numpy()
+print(g)
+"""),
+            dict(titre="1. Courbes granulométriques", solution="""
+plt.figure()
+plt.semilogx(d, pA, "o-", label="sol A")
+plt.semilogx(d, pB, "s-", label="sol B")
+plt.semilogx(d, pC, "^-", label="sol C")
+plt.axvline(0.002, color="gray", linestyle=":")    # limite argile / limon (2 µm)
+plt.axvline(0.05, color="gray", linestyle=":")     # limite limon / sable USDA (50 µm)
+plt.xlabel("diamètre équivalent d (mm)")
+plt.ylabel("% passant")
+plt.legend()
+plt.grid(True)
+plt.show()
+"""),
+            dict(titre="2. Diamètres caractéristiques, Cu et Cc", solution="""
+# diamètre tel que x % de la masse est plus fine : interpolation linéaire de log10(d) en fonction de p
 def D_x(d, p, x):
-    \"\"\"Diamètre (mm) tel que x % de la masse est plus fine (interpolation en log d).\"\"\"
-    # À COMPLÉTER : np.interp(x, p, np.log10(d)) puis 10**...
-    pass
+    log_d = np.interp(x, p, np.log10(d))
+    return 10 ** log_d
 
-# 3. fractions USDA / ISO
-# 4. ajustement log-normal
-def F_lognormale(d, dg, sg):
-    # À COMPLÉTER
-    pass
-""",
-        solution="""
-g = pd.read_csv("data/J01_granulometrie.csv")
-d = g["d_mm"].to_numpy()
-sols = {"A": g["sol_A_pct"].to_numpy(), "B": g["sol_B_pct"].to_numpy(), "C": g["sol_C_pct"].to_numpy()}
-
-# 1. tracé
-fig, ax = plt.subplots()
-for k, p in sols.items():
-    ax.semilogx(d, p, "o-", label=f"sol {k}")
-for D, lab in [(0.002, "2 µm"), (0.05, "50 µm (USDA)"), (0.063, "63 µm (ISO)")]:
-    ax.axvline(D, color="gray", ls=":", lw=1); ax.text(D, 2, lab, rotation=90, fontsize=8, ha="right")
-ax.set_xlabel("diamètre équivalent d (mm)"); ax.set_ylabel("% passant"); ax.legend(); plt.show()
-
-# 2. diamètres caractéristiques
+for nom, p in [("A", pA), ("B", pB), ("C", pC)]:
+    D10 = D_x(d, p, 10)
+    D30 = D_x(d, p, 30)
+    D50 = D_x(d, p, 50)
+    D60 = D_x(d, p, 60)
+    Cu = D60 / D10
+    Cc = D30**2 / (D10 * D60)
+    print(f"sol {nom} : D10 = {D10:.4f} mm, D50 = {D50:.3f} mm, D60 = {D60:.3f} mm, Cu = {Cu:.1f}, Cc = {Cc:.2f}")
+""", squelette="""
+# diamètre tel que x % de la masse est plus fine : interpolation linéaire de log10(d) en fonction de p
 def D_x(d, p, x):
-    \"\"\"Diamètre (mm) tel que x % de la masse est plus fine (interpolation linéaire en log10 d).\"\"\"
-    return 10 ** np.interp(x, p, np.log10(d))
+    log_d = # À COMPLÉTER (np.interp)
+    return 10 ** log_d
 
-res = []
-for k, p in sols.items():
-    D10, D30, D50, D60 = (D_x(d, p, x) for x in (10, 30, 50, 60))
-    res.append(dict(sol=k, D10=D10, D30=D30, D50=D50, D60=D60, Cu=D60 / D10, Cc=D30**2 / (D10 * D60)))
-res = pd.DataFrame(res).set_index("sol")
-display(res.round(4))
+for nom, p in [("A", pA), ("B", pB), ("C", pC)]:
+    D10 = D_x(d, p, 10)
+    D30 = # À COMPLÉTER
+    D50 = # À COMPLÉTER
+    D60 = # À COMPLÉTER
+    Cu = # À COMPLÉTER
+    Cc = # À COMPLÉTER
+    print(f"sol {nom} : D10 = {D10:.4f} mm, D50 = {D50:.3f} mm, D60 = {D60:.3f} mm, Cu = {Cu:.1f}, Cc = {Cc:.2f}")
+"""),
+            dict(titre="3. Fractions texturales USDA et ISO", solution="""
+log_d = np.log10(d)
+fractions = []
+for nom, p in [("A", pA), ("B", pB), ("C", pC)]:
+    # % passant à 2 µm, 50 µm et 63 µm (interpolation en log d)
+    p_2um = np.interp(np.log10(0.002), log_d, p)
+    p_50um = np.interp(np.log10(0.050), log_d, p)
+    p_63um = np.interp(np.log10(0.063), log_d, p)
+    argile = p_2um
+    limon_usda = p_50um - p_2um
+    sable_usda = 100 - p_50um
+    limon_iso = p_63um - p_2um
+    sable_iso = 100 - p_63um
+    fractions.append([nom, argile, limon_usda, sable_usda, limon_iso, sable_iso])
 
-# 3. fractions texturales
-def fractions(d, p, lim_sable=0.05):
-    argile = np.interp(np.log10(0.002), np.log10(d), p)
-    limon = np.interp(np.log10(lim_sable), np.log10(d), p) - argile
-    sable = 100 - argile - limon
-    return argile, limon, sable
+frac = pd.DataFrame(fractions, columns=["sol", "argile", "limon_USDA", "sable_USDA", "limon_ISO", "sable_ISO"])
+print(frac.round(1))
+""", squelette="""
+log_d = np.log10(d)
+fractions = []
+for nom, p in [("A", pA), ("B", pB), ("C", pC)]:
+    # % passant à 2 µm, 50 µm et 63 µm (interpolation en log d)
+    p_2um = np.interp(np.log10(0.002), log_d, p)
+    p_50um = # À COMPLÉTER
+    p_63um = # À COMPLÉTER
+    argile = # À COMPLÉTER
+    limon_usda = # À COMPLÉTER
+    sable_usda = # À COMPLÉTER
+    limon_iso = # À COMPLÉTER
+    sable_iso = # À COMPLÉTER
+    fractions.append([nom, argile, limon_usda, sable_usda, limon_iso, sable_iso])
 
-frac = pd.DataFrame({k: dict(zip(["argile", "limon", "sable"], fractions(d, p))) for k, p in sols.items()}).T
-frac_iso = pd.DataFrame({k: dict(zip(["argile", "limon", "sable"], fractions(d, p, 0.063))) for k, p in sols.items()}).T
-print("Fractions USDA (%) :"); display(frac.round(1))
-print("Fractions ISO (%) :"); display(frac_iso.round(1))
-
-# 4. loi log-normale sur le sol A
+frac = pd.DataFrame(fractions, columns=["sol", "argile", "limon_USDA", "sable_USDA", "limon_ISO", "sable_ISO"])
+print(frac.round(1))
+"""),
+            dict(titre="4. Loi log-normale ajustée sur le sol A", solution="""
+# % passant d'une distribution log-normale de diamètre médian dg et d'écart-type géométrique sg
 def F_lognormale(d, dg, sg):
-    return 50 * (1 + special.erf((np.log(d) - np.log(dg)) / (np.sqrt(2) * np.log(sg))))
+    return 50 * (1 + erf((np.log(d) - np.log(dg)) / (np.sqrt(2) * np.log(sg))))
 
-popt, _ = optimize.curve_fit(F_lognormale, d, sols["A"], p0=[0.02, 5])
-dg, sg = popt
+popt, pcov = curve_fit(F_lognormale, d, pA, p0=[0.02, 5])
+dg = popt[0]
+sg = popt[1]
+print(f"dg = {dg * 1000:.1f} µm, sigma_g = {sg:.2f}")
+
 dd = np.logspace(-3.2, 0.4, 200)
-fig, ax = plt.subplots()
-ax.semilogx(d, sols["A"], "o", label="sol A mesuré")
-ax.semilogx(dd, F_lognormale(dd, *popt), "-", label=f"log-normale : $d_g$ = {dg*1000:.1f} µm, $\\\\sigma_g$ = {sg:.2f}")
-ax.set_xlabel("d (mm)"); ax.set_ylabel("% passant"); ax.legend(); plt.show()
-rmse = np.sqrt(np.mean((F_lognormale(d, *popt) - sols["A"])**2))
+plt.figure()
+plt.semilogx(d, pA, "o", label="sol A mesuré")
+plt.semilogx(dd, F_lognormale(dd, dg, sg), "-", label="log-normale ajustée")
+plt.xlabel("d (mm)")
+plt.ylabel("% passant")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+erreur = F_lognormale(d, dg, sg) - pA
+rmse = np.sqrt(np.mean(erreur**2))
 print(f"RMSE de l'ajustement : {rmse:.2f} %")
-""",
+""", squelette="""
+# % passant d'une distribution log-normale de diamètre médian dg et d'écart-type géométrique sg
+def F_lognormale(d, dg, sg):
+    return # À COMPLÉTER
+
+popt, pcov = curve_fit(F_lognormale, d, pA, p0=[0.02, 5])
+dg = popt[0]
+sg = popt[1]
+print(f"dg = {dg * 1000:.1f} µm, sigma_g = {sg:.2f}")
+
+dd = np.logspace(-3.2, 0.4, 200)
+plt.figure()
+plt.semilogx(d, pA, "o", label="sol A mesuré")
+plt.semilogx(dd, F_lognormale(dd, dg, sg), "-", label="log-normale ajustée")
+plt.xlabel("d (mm)")
+plt.ylabel("% passant")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+erreur = F_lognormale(d, dg, sg) - pA
+rmse = # À COMPLÉTER
+print(f"RMSE de l'ajustement : {rmse:.2f} %")
+"""),
+        ],
         commentaire="""
 Le sol B (sable) est uniforme ($C_u \\approx 2$–3), le sol A est bien gradué. Passer de la limite USDA (50 µm) à la limite ISO (63 µm)
 déplace quelques pour cent du sable vers le limon : la classe texturale peut changer, d'où l'importance de préciser le système.
 L'ajustement log-normal est raisonnable pour A mais une distribution bimodale ferait mieux pour un sol à deux populations de grains.
 """)
 
-    # ------------------------------------------------------------------ Ex 3
+    # ================================================================== Exercice 3
     nb.exercice(
         "Loi de Stokes et sédimentation", duree="10 min",
         enonce="""
-1. Écrire `viscosite(T)` (Pa·s) par interpolation dans la table : 5 °C : 1,519 ; 10 °C : 1,307 ; 15 °C : 1,139 ;
+1. Calculer la viscosité de l'eau (Pa·s) par interpolation dans la table : 5 °C : 1,519 ; 10 °C : 1,307 ; 15 °C : 1,139 ;
    20 °C : 1,002 ; 25 °C : 0,890 ; 30 °C : 0,798 (mPa·s).
 2. Écrire `stokes(d, T)` qui retourne la vitesse de chute (m/s) d'une particule de diamètre $d$ (m) à la température $T$,
    avec $\\rho_s = 2650$ et $\\rho_w = 998$ kg/m³ : $v = g(\\rho_s-\\rho_w)d^2/(18\\mu)$.
-3. Produire la table des temps (h:min:s) nécessaires pour qu'une particule de 50, 20, 5 et 2 µm parcoure 10 cm, à 15, 20 et 25 °C.
-4. Déterminer le diamètre pour lequel $Re = \\rho_w v d/\\mu = 1$ à 20 °C (limite de validité) avec `scipy.optimize.brentq`.
+3. Produire la table des temps (minutes) nécessaires pour qu'une particule de 50, 20, 5 et 2 µm parcoure 10 cm, à 15, 20 et 25 °C.
+4. Déterminer le diamètre pour lequel $Re = \\rho_w v d/\\mu = 1$ à 20 °C (limite de validité) avec `brentq`.
 """,
-        squelette="""
-T_tab  = np.array([5, 10, 15, 20, 25, 30])
-mu_tab = np.array([1.519, 1.307, 1.139, 1.002, 0.890, 0.798]) * 1e-3   # Pa s
-RHO_S, RHO_WATER, G = 2650.0, 998.0, 9.81
+        etapes=[
+            dict(titre="1. Viscosité de l'eau", solution="""
+T_table = np.array([5, 10, 15, 20, 25, 30])                               # °C
+mu_table = np.array([1.519, 1.307, 1.139, 1.002, 0.890, 0.798]) * 1e-3    # Pa s
 
+# viscosité dynamique (Pa s) par interpolation linéaire dans la table
 def viscosite(T):
-    # À COMPLÉTER
-    pass
+    return np.interp(T, T_table, mu_table)
 
-def stokes(d, T):
-    # À COMPLÉTER
-    pass
+print("mu(20 °C) =", viscosite(20), "Pa s")
+""", squelette="""
+T_table = np.array([5, 10, 15, 20, 25, 30])                               # °C
+mu_table = np.array([1.519, 1.307, 1.139, 1.002, 0.890, 0.798]) * 1e-3    # Pa s
 
-# 3. table des temps de prélèvement à z = 0.10 m
-# 4. diamètre limite Re = 1
-""",
-        solution="""
-T_tab  = np.array([5, 10, 15, 20, 25, 30])
-mu_tab = np.array([1.519, 1.307, 1.139, 1.002, 0.890, 0.798]) * 1e-3   # Pa s
-RHO_S, RHO_WATER, G = 2650.0, 998.0, 9.81
-
+# viscosité dynamique (Pa s) par interpolation linéaire dans la table
 def viscosite(T):
-    \"\"\"Viscosité dynamique de l'eau (Pa s) par interpolation linéaire.\"\"\"
-    return np.interp(T, T_tab, mu_tab)
+    return # À COMPLÉTER
 
+print("mu(20 °C) =", viscosite(20), "Pa s")
+"""),
+            dict(titre="2. Vitesse de chute de Stokes", solution="""
+rho_s = 2650.0    # kg/m³
+rho_eau = 998.0   # kg/m³
+g_pes = 9.81      # m/s²
+
+# vitesse de chute (m/s) d'une sphère de diamètre d (m) à la température T (°C)
 def stokes(d, T):
-    \"\"\"Vitesse de chute (m/s) d'une sphère de diamètre d (m) à T (°C).\"\"\"
-    return G * (RHO_S - RHO_WATER) * d**2 / (18 * viscosite(T))
+    mu = viscosite(T)
+    v = g_pes * (rho_s - rho_eau) * d**2 / (18 * mu)
+    return v
 
-def hms(t):
-    t = int(round(t)); return f"{t//3600:d} h {(t%3600)//60:02d} min {t%60:02d} s"
+print("v(20 µm, 20 °C) =", stokes(20e-6, 20), "m/s")
+""", squelette="""
+rho_s = 2650.0    # kg/m³
+rho_eau = 998.0   # kg/m³
+g_pes = 9.81      # m/s²
 
-z = 0.10
-rows = []
-for dm in [50, 20, 5, 2]:
-    row = {"d (µm)": dm}
-    for T in [15, 20, 25]:
-        row[f"{T} °C"] = hms(z / stokes(dm * 1e-6, T))
-    rows.append(row)
-display(pd.DataFrame(rows).set_index("d (µm)"))
+# vitesse de chute (m/s) d'une sphère de diamètre d (m) à la température T (°C)
+def stokes(d, T):
+    mu = viscosite(T)
+    v = # À COMPLÉTER
+    return v
 
-# 4. diamètre limite Re = 1 à 20 °C
-Re = lambda d, T=20: RHO_WATER * stokes(d, T) * d / viscosite(T)
-d_lim = optimize.brentq(lambda d: Re(d) - 1, 1e-6, 1e-3)
-print(f"Re = 1 pour d ≈ {d_lim*1e6:.0f} µm : au-delà, la loi de Stokes surestime la vitesse (tamisage nécessaire).")
-""",
+print("v(20 µm, 20 °C) =", stokes(20e-6, 20), "m/s")
+"""),
+            dict(titre="3. Temps de prélèvement à 10 cm", solution="""
+z = 0.10   # profondeur de prélèvement (m)
+print("d (µm)   15 °C    20 °C    25 °C   (temps en minutes pour parcourir 10 cm)")
+for d_um in [50, 20, 5, 2]:
+    d_m = d_um * 1e-6
+    t15 = z / stokes(d_m, 15) / 60
+    t20 = z / stokes(d_m, 20) / 60
+    t25 = z / stokes(d_m, 25) / 60
+    print(f"{d_um:5d}   {t15:7.1f}  {t20:7.1f}  {t25:7.1f}")
+""", squelette="""
+z = 0.10   # profondeur de prélèvement (m)
+print("d (µm)   15 °C    20 °C    25 °C   (temps en minutes pour parcourir 10 cm)")
+for d_um in [50, 20, 5, 2]:
+    d_m = d_um * 1e-6
+    t15 = # À COMPLÉTER (temps = distance / vitesse, en minutes)
+    t20 = # À COMPLÉTER
+    t25 = # À COMPLÉTER
+    print(f"{d_um:5d}   {t15:7.1f}  {t20:7.1f}  {t25:7.1f}")
+"""),
+            dict(titre="4. Limite de validité : Re = 1", solution="""
+# nombre de Reynolds de la particule à 20 °C, moins 1 : la racine donne le diamètre limite
+def reynolds_moins_1(d):
+    v = stokes(d, 20)
+    Re = rho_eau * v * d / viscosite(20)
+    return Re - 1
+
+d_lim = brentq(reynolds_moins_1, 1e-6, 1e-3)
+print(f"Re = 1 pour d = {d_lim * 1e6:.0f} µm : au-delà, la loi de Stokes surestime la vitesse (tamisage nécessaire).")
+""", squelette="""
+# nombre de Reynolds de la particule à 20 °C, moins 1 : la racine donne le diamètre limite
+def reynolds_moins_1(d):
+    v = stokes(d, 20)
+    Re = # À COMPLÉTER
+    return Re - 1
+
+d_lim = brentq(reynolds_moins_1, 1e-6, 1e-3)
+print(f"Re = 1 pour d = {d_lim * 1e6:.0f} µm : au-delà, la loi de Stokes surestime la vitesse (tamisage nécessaire).")
+"""),
+        ],
         commentaire="""
 La viscosité varie de ~2,5 %/°C : une erreur de 5 °C sur la température change les temps de prélèvement de ~13 %.
 Le diamètre limite (~100 µm) justifie de tamiser les sables et de ne sédimenter que les limons et argiles.
 """)
 
-    # ------------------------------------------------------------------ Ex 4
+    # ================================================================== Exercice 4
     nb.exercice(
         "Triangle textural", duree="15 min",
         enonce="""
@@ -290,119 +454,208 @@ Le diamètre limite (~100 µm) justifie de tamiser les sables et de ne sédiment
    7 ≤ argile < 27, 28 ≤ limon < 50, sable ≤ 52 → *loam* ; limon ≥ 50 → *loam limoneux* (12 ≤ argile < 27, ou argile < 12 et limon < 80)
    ou *limon* (limon ≥ 80, argile < 12) ; sinon : *sable* si limon + 1,5 argile < 15, *sable loameux* si limon + 2 argile < 30,
    *loam sableux* autrement.
-2. Écrire `tern(sable, argile)` qui convertit une composition en coordonnées cartésiennes du triangle
-   ($x = 100 - $ sable $-$ argile$/2$, $y = $ argile $\\cdot\\sqrt3/2$) et tracer le triangle (contour + graduations).
-3. Placer les sols A, B, C (exercice 2, fractions USDA) et les 12 échantillons de l'exercice 1 ; annoter la classe.
+2. Convertir une composition en coordonnées cartésiennes du triangle ($x = 100 - $ sable $-$ argile$/2$, $y = $ argile $\\cdot\\sqrt3/2$)
+   et tracer le contour du triangle.
+3. Placer les sols A, B, C (exercice 2, fractions USDA) et les 12 échantillons de l'exercice 1 ; afficher leur classe.
 """,
-        squelette="""
+        etapes=[
+            dict(titre="1. Classe texturale USDA", solution="""
 def classe_usda(sable, argile):
     limon = 100 - sable - argile
-    # À COMPLÉTER : suite de tests if/elif renvoyant le nom de la classe
-    pass
+    if argile >= 40 and sable <= 45 and limon < 40:
+        return "argile"
+    elif argile >= 40 and limon >= 40:
+        return "argile limoneuse"
+    elif argile >= 35 and sable > 45:
+        return "argile sableuse"
+    elif 27 <= argile < 40 and 20 < sable <= 45:
+        return "loam argileux"
+    elif 27 <= argile < 40 and sable <= 20:
+        return "loam limono-argileux"
+    elif 20 <= argile < 35 and sable > 45 and limon < 28:
+        return "loam sablo-argileux"
+    elif 7 <= argile < 27 and 28 <= limon < 50 and sable <= 52:
+        return "loam"
+    elif limon >= 50 and 12 <= argile < 27:
+        return "loam limoneux"
+    elif 50 <= limon < 80 and argile < 12:
+        return "loam limoneux"
+    elif limon >= 80 and argile < 12:
+        return "limon"
+    elif limon + 1.5 * argile < 15:
+        return "sable"
+    elif limon + 2 * argile < 30:
+        return "sable loameux"
+    else:
+        return "loam sableux"
 
-def tern(sable, argile):
-    # À COMPLÉTER
-    pass
-
-# tracé du triangle et des points
-""",
-        solution="""
+print(classe_usda(40, 20))   # attendu : loam
+print(classe_usda(90, 3))    # attendu : sable
+""", squelette="""
 def classe_usda(sable, argile):
     limon = 100 - sable - argile
-    if argile >= 40 and sable <= 45 and limon < 40:   return "argile"
-    if argile >= 40 and limon >= 40:                  return "argile limoneuse"
-    if argile >= 35 and sable > 45:                   return "argile sableuse"
-    if 27 <= argile < 40 and 20 < sable <= 45:        return "loam argileux"
-    if 27 <= argile < 40 and sable <= 20:             return "loam limono-argileux"
-    if 20 <= argile < 35 and sable > 45 and limon < 28: return "loam sablo-argileux"
-    if 7 <= argile < 27 and 28 <= limon < 50 and sable <= 52: return "loam"
-    if (limon >= 50 and 12 <= argile < 27) or (50 <= limon < 80 and argile < 12): return "loam limoneux"
-    if limon >= 80 and argile < 12:                   return "limon"
-    if limon + 1.5 * argile < 15:                     return "sable"
-    if limon + 2 * argile < 30:                       return "sable loameux"
-    return "loam sableux"
+    if argile >= 40 and sable <= 45 and limon < 40:
+        return "argile"
+    elif argile >= 40 and limon >= 40:
+        return "argile limoneuse"
+    # À COMPLÉTER : les autres règles, dans l'ordre de l'énoncé (elif ... : return "...")
+    else:
+        return "loam sableux"
 
-def tern(sable, argile):
-    return 100 - sable - argile / 2, argile * np.sqrt(3) / 2
+print(classe_usda(40, 20))   # attendu : loam
+print(classe_usda(90, 3))    # attendu : sable
+"""),
+            dict(titre="2. Coordonnées et contour du triangle", solution="""
+# coordonnées cartésiennes d'un point du triangle (sable en bas, argile en haut)
+def x_tri(sable, argile):
+    return 100 - sable - argile / 2
 
-# fond coloré : classification d'une grille de compositions
-classes = ["sable", "sable loameux", "loam sableux", "loam", "limon", "loam limoneux", "loam sablo-argileux",
-           "loam argileux", "loam limono-argileux", "argile sableuse", "argile limoneuse", "argile"]
-couleurs = dict(zip(classes, plt.cm.YlOrBr(np.linspace(0.15, 0.95, 12))))
-fig, ax = plt.subplots(figsize=(8, 7))
-pts = {c: [] for c in classes}
-for s in np.arange(0, 100.1, 1):
-    for a in np.arange(0, 100.1 - s, 1):
-        pts[classe_usda(s, a)].append(tern(s, a))
-for c, P in pts.items():
-    P = np.array(P)
-    ax.scatter(P[:, 0], P[:, 1], s=9, marker="s", color=couleurs[c], linewidths=0)
-    ax.text(*P.mean(axis=0), c, ha="center", va="center", fontsize=8, fontweight="bold")
-tri = np.array([tern(100, 0), tern(0, 0), tern(0, 100), tern(100, 0)])
-ax.plot(tri[:, 0], tri[:, 1], "k-", lw=1.2)
-for k in range(10, 100, 10):
-    ax.text(*np.add(tern(k, 0), (0, -4)), str(k), ha="center", fontsize=7)
-    ax.text(*np.add(tern(0, k), (3, 0)), str(k), ha="left", fontsize=7)
-    ax.text(*np.add(tern(100 - k, k), (-3, 0)), str(k), ha="right", fontsize=7)
-ax.text(50, -9, "sable (%)  ←", ha="center"); ax.text(82, 46, "limon (%)  ←", rotation=-60, ha="center")
-ax.text(18, 46, "argile (%)  →", rotation=60, ha="center")
+def y_tri(sable, argile):
+    return argile * np.sqrt(3) / 2
 
-# sols A, B, C (fractions USDA de l'exercice 2) et échantillons de l'exercice 1
-for k in frac.index:
-    s, a = frac.loc[k, "sable"], frac.loc[k, "argile"]
-    ax.plot(*tern(s, a), "o", ms=10, color="royalblue", mec="white")
-    ax.annotate(f"sol {k} : {classe_usda(s, a)}", tern(s, a), (8, 8), textcoords="offset points", fontsize=8, color="royalblue")
-for _, r in df.iterrows():
-    ax.plot(*tern(r["sable_pct"], r["argile_pct"]), "^", ms=6, color="seagreen", mec="white")
-ax.plot([], [], "^", color="seagreen", label="échantillons ex. 1"); ax.legend(loc="upper right")
-ax.set_aspect("equal"); ax.axis("off"); plt.show()
+# les trois sommets : 100 % sable, 100 % limon, 100 % argile
+x_contour = []
+y_contour = []
+for s, a in [(100, 0), (0, 0), (0, 100), (100, 0)]:
+    x_contour.append(x_tri(s, a))
+    y_contour.append(y_tri(s, a))
 
-df["classe_USDA"] = [classe_usda(s, a) for s, a in zip(df["sable_pct"], df["argile_pct"])]
+plt.figure(figsize=(7, 6))
+plt.plot(x_contour, y_contour, "k-")
+plt.text(0, -5, "100 % sable", ha="center")
+plt.text(100, -5, "100 % limon", ha="center")
+plt.text(50, 90, "100 % argile", ha="center")
+plt.axis("equal")
+plt.axis("off")
+plt.show()
+""", squelette="""
+# coordonnées cartésiennes d'un point du triangle (sable en bas, argile en haut)
+def x_tri(sable, argile):
+    return # À COMPLÉTER
+
+def y_tri(sable, argile):
+    return # À COMPLÉTER
+
+x_contour = []
+y_contour = []
+for s, a in [(100, 0), (0, 0), (0, 100), (100, 0)]:
+    x_contour.append(x_tri(s, a))
+    y_contour.append(y_tri(s, a))
+
+plt.figure(figsize=(7, 6))
+plt.plot(x_contour, y_contour, "k-")
+plt.text(0, -5, "100 % sable", ha="center")
+plt.text(100, -5, "100 % limon", ha="center")
+plt.text(50, 90, "100 % argile", ha="center")
+plt.axis("equal")
+plt.axis("off")
+plt.show()
+"""),
+            dict(titre="3. Placer les sols et les échantillons", solution="""
+plt.figure(figsize=(7, 6))
+plt.plot(x_contour, y_contour, "k-")
+
+# sols A, B, C de l'exercice 2 (fractions USDA)
+for i in range(len(frac)):
+    nom = frac.loc[i, "sol"]
+    s = frac.loc[i, "sable_USDA"]
+    a = frac.loc[i, "argile"]
+    classe = classe_usda(s, a)
+    plt.plot(x_tri(s, a), y_tri(s, a), "o", markersize=10)
+    plt.text(x_tri(s, a) + 2, y_tri(s, a) + 2, "sol " + nom + " : " + classe)
+    print("sol", nom, ":", classe)
+
+# les 12 échantillons de l'exercice 1
+for i in range(len(df)):
+    s = df.loc[i, "sable_pct"]
+    a = df.loc[i, "argile_pct"]
+    plt.plot(x_tri(s, a), y_tri(s, a), "g^")
+
+plt.text(0, -5, "100 % sable", ha="center")
+plt.text(100, -5, "100 % limon", ha="center")
+plt.text(50, 90, "100 % argile", ha="center")
+plt.axis("equal")
+plt.axis("off")
+plt.show()
+
+# classe de chaque échantillon
+classes = []
+for i in range(len(df)):
+    classes.append(classe_usda(df.loc[i, "sable_pct"], df.loc[i, "argile_pct"]))
+df["classe_USDA"] = classes
 print(df["classe_USDA"].value_counts())
-""",
+""", squelette="""
+plt.figure(figsize=(7, 6))
+plt.plot(x_contour, y_contour, "k-")
+
+# sols A, B, C de l'exercice 2 (fractions USDA)
+for i in range(len(frac)):
+    nom = frac.loc[i, "sol"]
+    s = frac.loc[i, "sable_USDA"]
+    a = frac.loc[i, "argile"]
+    classe = # À COMPLÉTER
+    plt.plot(x_tri(s, a), y_tri(s, a), "o", markersize=10)
+    plt.text(x_tri(s, a) + 2, y_tri(s, a) + 2, "sol " + nom + " : " + classe)
+    print("sol", nom, ":", classe)
+
+# À COMPLÉTER : placer les 12 échantillons de l'exercice 1 (colonnes sable_pct et argile_pct de df) avec plt.plot(..., "g^")
+
+plt.text(0, -5, "100 % sable", ha="center")
+plt.text(100, -5, "100 % limon", ha="center")
+plt.text(50, 90, "100 % argile", ha="center")
+plt.axis("equal")
+plt.axis("off")
+plt.show()
+
+# classe de chaque échantillon
+classes = []
+for i in range(len(df)):
+    classes.append(# À COMPLÉTER)
+df["classe_USDA"] = classes
+print(df["classe_USDA"].value_counts())
+"""),
+        ],
         commentaire="""
 Les 12 échantillons (38 % sable, 21 % argile) sont tous des loams ; le sol C (argile ~38 %) est un loam limono-argileux et le sol B un sable.
-Le tracé « par grille » évite d'avoir à coder les polygones des classes : on classe des milliers de points et on colore.
 """)
 
-    # ------------------------------------------------------------------ Bonus
+    # ================================================================== Bonus
     nb.exercice(
-        "Bonus — analyse dimensionnelle avec sympy", duree="facultatif",
+        "Bonus — vérification numérique de l'analyse dimensionnelle", duree="facultatif",
         enonce="""
-Avec `sympy`, résoudre le système d'exposants du théorème de Buckingham pour $\\Pi_1 = v\\,d^{a}\\Delta\\rho^{b}\\mu^{c}$ et
-$\\Pi_2 = g\\,d^{a}\\Delta\\rho^{b}\\mu^{c}$ (dimensions M, L, T), puis vérifier numériquement, pour $d$ de 1 à 60 µm,
-que $\\Pi_1/\\Pi_2 = 1/18$ dans le régime de Stokes.
+Le théorème de Buckingham appliqué à la chute d'une particule donne deux nombres sans dimension,
+$\\Pi_1 = v\\,d\\,\\Delta\\rho/\\mu$ et $\\Pi_2 = g\\,d^3\\,\\Delta\\rho^2/\\mu^2$. Vérifier numériquement, pour $d$ de 1 à 60 µm,
+que $\\Pi_1/\\Pi_2 = 1/18$ dans le régime de Stokes (à 20 °C).
 """,
-        squelette="""
-import sympy as sp
-a, b, c = sp.symbols("a b c")
-# dimensions : [d] = L, [Δρ] = M L^-3, [μ] = M L^-1 T^-1, [v] = L T^-1, [g] = L T^-2
-# À COMPLÉTER : équations d'homogénéité (M, L, T) et sp.solve
-""",
-        solution="""
-import sympy as sp
-a, b, c = sp.symbols("a b c")
-# exposants (M, L, T) : d -> (0,1,0) ; Δρ -> (1,-3,0) ; μ -> (1,-1,-1)
-def pi_exposants(M0, L0, T0):
-    eqs = [sp.Eq(M0 + b + c, 0), sp.Eq(L0 + a - 3*b - c, 0), sp.Eq(T0 - c, 0)]
-    return sp.solve(eqs, (a, b, c))
-print("Π1 (v = L T^-1) :", pi_exposants(0, 1, -1))
-print("Π2 (g = L T^-2) :", pi_exposants(0, 1, -2))
-
-dd = np.linspace(1, 60, 6) * 1e-6
-mu, drho = viscosite(20), RHO_S - RHO_WATER
-v = stokes(dd, 20)
-Pi1 = v * dd * drho / mu
-Pi2 = G * dd**3 * drho**2 / mu**2
-print("Π1/Π2 =", np.round(Pi1 / Pi2, 5), " (1/18 =", round(1/18, 5), ")")
-""",
-        commentaire="Les exposants (1, 1, −1) et (3, 2, −2) sont retrouvés ; le rapport Π₁/Π₂ = 1/18 est exact par construction de la loi de Stokes.")
+        etapes=[
+            dict(titre="Rapport Π1/Π2", solution="""
+mu = viscosite(20)
+delta_rho = rho_s - rho_eau
+for d_um in [1, 10, 20, 40, 60]:
+    d_m = d_um * 1e-6
+    v = stokes(d_m, 20)
+    Pi1 = v * d_m * delta_rho / mu
+    Pi2 = g_pes * d_m**3 * delta_rho**2 / mu**2
+    print(f"d = {d_um:2d} µm : Pi1/Pi2 = {Pi1 / Pi2:.5f}")
+print("1/18 =", round(1 / 18, 5))
+""", squelette="""
+mu = viscosite(20)
+delta_rho = rho_s - rho_eau
+for d_um in [1, 10, 20, 40, 60]:
+    d_m = d_um * 1e-6
+    v = stokes(d_m, 20)
+    Pi1 = # À COMPLÉTER
+    Pi2 = # À COMPLÉTER
+    print(f"d = {d_um:2d} µm : Pi1/Pi2 = {Pi1 / Pi2:.5f}")
+print("1/18 =", round(1 / 18, 5))
+"""),
+        ],
+        commentaire="Le rapport Π₁/Π₂ = 1/18 est exact par construction de la loi de Stokes : les deux nombres sans dimension ne sont pas indépendants dans ce régime.")
 
     nb.md("""
 ## Pour aller plus loin
 
 * Refaire l'exercice 2 avec une distribution bimodale (somme de deux log-normales) pour le sol C.
 * Estimer la surface spécifique des trois sols à partir de leur courbe granulométrique ($S_s = \\sum_i f_i\\, 6/(\\rho_s d_i)$).
-* Comparer vos fonctions à celles du paquet `soiltexture` (R) ou `pyrolite` (Python).
 """)
     return nb
